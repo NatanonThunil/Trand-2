@@ -1,0 +1,16 @@
+[
+  {
+    "chat_id": 8489252005,
+    "symbol": "BTCUSDT",
+    "exchange": "BINANCE",
+    "direction": "below",
+    "price": 60000.0
+  },
+  {
+    "chat_id": 8489252005,
+    "symbol": "PTT",
+    "exchange": "SET",
+    "direction": "below",
+    "price": 33.0
+  }
+]
