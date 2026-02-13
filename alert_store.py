@@ -2,7 +2,7 @@ import json
 import os
 
 # ✅ ต้องมี /tmp/data/ นำหน้า
-FILE = "/tmp/data/alerts.json"
+FILE = "/app/data/alerts.json"
 
 # --- เพิ่มบรรทัดนี้ ---
 print(f"🟢 ALERT STORE LOADED: Using file path -> {FILE}")

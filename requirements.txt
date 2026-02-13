@@ -1,0 +1,6 @@
+python-telegram-bot[job-queue]
+git+https://github.com/rongardF/tvdatafeed.git
+pandas
+matplotlib
+requests
+python-dotenv
