@@ -4,39 +4,35 @@ import os
 import threading
 from datetime import time, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import socket # เพิ่ม import socket
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 
-# ตั้งค่า Logging (สำคัญมาก เพื่อให้เห็น Error ใน Choreo)
+# ตั้งค่า Logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# โหลด Environment Variables
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# ตรวจสอบ Token
 if not BOT_TOKEN:
-    logger.critical("❌ ไม่พบ BOT_TOKEN! กรุณาตรวจสอบไฟล์ .env หรือ Configs")
+    logger.critical("❌ ไม่พบ BOT_TOKEN! ตรวจสอบไฟล์ .env")
     exit(1)
 
 # ==========================================
-# 🧩 IMPORTS (ใส่ Try-Except กันบอทดับถ้าไฟล์หาย)
+# 🧩 IMPORTS
 # ==========================================
 try:
-    # พยายามโหลด guide
     try:
         from guide import get_user_guide
     except ImportError:
-        logger.warning("⚠️ ไม่พบไฟล์ guide.py - สร้างฟังก์ชันสำรอง")
         def get_user_guide(): return "❌ ไม่พบไฟล์คู่มือ (guide.py)"
 
-    # โหลด Strategy
     from strategy import (
         run_strategy,
         scan_top_th_symbols, scan_top_cn_symbols, scan_top_hk_symbols, scan_top_us_stock_symbols, scan_top_crypto_symbols,
@@ -46,20 +42,17 @@ try:
         run_heavy_scan_all_markets
     )
     
-    # โหลด Stores
     from alert_store import load_alerts, save_alerts, remove_alert, format_alert_message
     from user_store import is_new_user, mark_user_seen
     from top_notify_store import add_top_notify_user, remove_top_notify_user, load_top_notify_users
-    
     from tvDatafeed import TvDatafeed, Interval
 
 except ImportError as e:
     logger.critical(f"❌ IMPORT ERROR: {e}")
-    logger.critical("ตรวจสอบว่าไฟล์ครบหรือไม่: strategy.py, guide.py, *_store.py")
     exit(1)
 
 # ======================
-# 🌐 DUMMY SERVER (กัน Choreo หลับ)
+# 🌐 DUMMY SERVER (แบบปลอดภัย รันได้ทั้ง Windows/Cloud)
 # ======================
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -69,10 +62,16 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is active!")
 
 def run_web_server():
+    # ถ้ามี ENV PORT (บน Cloud) ให้ใช้ค่าบั้น ถ้าไม่มี (บนคอม) ให้ลอง 8080 หรือสุ่ม
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    logger.info(f"🌍 Dummy Server running on port {port}")
-    server.serve_forever()
+    
+    try:
+        server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+        logger.info(f"🌍 Dummy Server running on port {port}")
+        server.serve_forever()
+    except OSError as e:
+        # ถ้า Port ชน (WinError 10013) ให้ข้ามไปเลย ไม่ต้อง Crash
+        logger.warning(f"⚠️ Web Server Start Failed (ไม่ส่งผลต่อบอท): {e}")
 
 # ======================
 # 🛠 HELPER FUNCTIONS
@@ -121,21 +120,23 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, run_strategy, symbol, exchange)
         
-        await status_msg.delete() # ลบข้อความกำลังโหลด
+        await status_msg.delete()
         await update.message.reply_text(result["text"], parse_mode="Markdown")
 
         chart_path = result.get("chart")
         if chart_path and os.path.exists(chart_path):
             with open(chart_path, "rb") as photo:
                 await update.message.reply_photo(photo)
-        elif chart_path:
-            logger.warning(f"Chart path exists in result but file not found: {chart_path}")
-
+    
+    except ValueError as ve:
+        # จับ Error เฉพาะเรื่อง float ที่คุณเจอ
+        logger.error(f"Signal Value Error: {ve}")
+        await update.message.reply_text(f"❌ ข้อมูลกราฟผิดพลาด (TvDatafeed คืนค่าแปลกๆ)\nError: {ve}")
+        
     except Exception as e:
         logger.error(f"Signal Error: {e}")
         await update.message.reply_text(f"❌ เกิดข้อผิดพลาด: {e}")
     finally:
-        # ลบไฟล์ภาพเพื่อประหยัดพื้นที่
         if chart_path and os.path.exists(chart_path):
             try: os.remove(chart_path)
             except: pass
@@ -239,7 +240,7 @@ async def send_daily_top(context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ======================
 def main():
-    # เริ่ม Dummy Server
+    # ใช้ Try-Except ครอบเซิร์ฟเวอร์ ถ้าเปิดไม่ได้ก็ไม่ต้องตาย
     threading.Thread(target=run_web_server, daemon=True).start()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
