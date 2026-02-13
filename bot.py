@@ -2,7 +2,9 @@ import asyncio
 from datetime import time, timezone, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from guide import get_user_guide
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import os
 
 # ==========================================
 # 🧩 STRATEGY IMPORTS
@@ -265,9 +267,29 @@ async def scan_market_job(context: ContextTypes.DEFAULT_TYPE):
     await loop.run_in_executor(None, run_heavy_scan_all_markets)
 
 # ======================
+# 🌐 DUMMY WEB SERVER (เพื่อหลอก Choreo ว่าเราคือเว็บ)
+# ======================
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is running OK!")
+
+def run_web_server():
+    # Choreo มักจะส่ง PORT มาใน Environment Variable (ค่า default คือ 8080)
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    print(f"🌍 Dummy Server running on port {port}")
+    server.serve_forever()
+
+# ======================
 # MAIN
 # ======================
 def main():
+    # ✅ 1. สั่งรัน Web Server ใน Thread แยก (เพื่อให้บอทกับเว็บทำงานพร้อมกัน)
+    threading.Thread(target=run_web_server, daemon=True).start()
+    
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     # Handlers
