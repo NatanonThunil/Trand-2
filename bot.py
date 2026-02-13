@@ -1,76 +1,99 @@
 import asyncio
+import logging
+import os
+import threading
 from datetime import time, timezone, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from guide import get_user_guide
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import os
-import logging # ✅ เพิ่ม Logging
+from dotenv import load_dotenv
 
-# ==========================================
-# ⚙️ LOGGING SETUP (สำคัญมากสำหรับการแก้บั๊ก)
-# ==========================================
+# ตั้งค่า Logging (สำคัญมาก เพื่อให้เห็น Error ใน Choreo)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ==========================================
-# 🧩 STRATEGY IMPORTS
-# ==========================================
-try:
-    from strategy import (
-        run_strategy,
-        # Scanners (Buy)
-        scan_top_th_symbols, scan_top_cn_symbols, scan_top_hk_symbols, scan_top_us_stock_symbols, scan_top_crypto_symbols,
-        # Scanners (Sell)
-        scan_top_th_sell_symbols, scan_top_cn_sell_symbols, scan_top_hk_sell_symbols, scan_top_us_stock_sell_symbols, scan_top_crypto_sell_symbols,
-        # Getters (Buy)
-        get_top_th_text, get_top_cn_text, get_top_hk_text, get_top_us_stock_text, get_top_crypto_text, get_global_top_text,
-        # Getters (Sell)
-        get_top_th_sell_text, get_top_cn_sell_text, get_top_hk_sell_text, get_top_us_stock_sell_text, get_top_crypto_sell_text, get_global_sell_text,
-        run_heavy_scan_all_markets
-    )
-except ImportError as e:
-    logger.error(f"❌ IMPORT ERROR: ไม่สามารถโหลด strategy.py ได้: {e}")
-    logger.error("ตรวจสอบว่าไฟล์ strategy.py มีฟังก์ชันครบถ้วนตามโค้ดล่าสุดหรือไม่")
-    exit(1)
-
-from alert_store import load_alerts, save_alerts, remove_alert, format_alert_message
-from tvDatafeed import TvDatafeed, Interval
-from dotenv import load_dotenv
-from user_store import is_new_user, mark_user_seen
-from top_notify_store import add_top_notify_user, remove_top_notify_user, load_top_notify_users
-
+# โหลด Environment Variables
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+# ตรวจสอบ Token
 if not BOT_TOKEN:
-    logger.critical("❌ ไม่พบ BOT_TOKEN ในไฟล์ .env")
+    logger.critical("❌ ไม่พบ BOT_TOKEN! กรุณาตรวจสอบไฟล์ .env หรือ Configs")
+    exit(1)
+
+# ==========================================
+# 🧩 IMPORTS (ใส่ Try-Except กันบอทดับถ้าไฟล์หาย)
+# ==========================================
+try:
+    # พยายามโหลด guide
+    try:
+        from guide import get_user_guide
+    except ImportError:
+        logger.warning("⚠️ ไม่พบไฟล์ guide.py - สร้างฟังก์ชันสำรอง")
+        def get_user_guide(): return "❌ ไม่พบไฟล์คู่มือ (guide.py)"
+
+    # โหลด Strategy
+    from strategy import (
+        run_strategy,
+        scan_top_th_symbols, scan_top_cn_symbols, scan_top_hk_symbols, scan_top_us_stock_symbols, scan_top_crypto_symbols,
+        scan_top_th_sell_symbols, scan_top_cn_sell_symbols, scan_top_hk_sell_symbols, scan_top_us_stock_sell_symbols, scan_top_crypto_sell_symbols,
+        get_top_th_text, get_top_cn_text, get_top_hk_text, get_top_us_stock_text, get_top_crypto_text, get_global_top_text,
+        get_top_th_sell_text, get_top_cn_sell_text, get_top_hk_sell_text, get_top_us_stock_sell_text, get_top_crypto_sell_text, get_global_sell_text,
+        run_heavy_scan_all_markets
+    )
+    
+    # โหลด Stores
+    from alert_store import load_alerts, save_alerts, remove_alert, format_alert_message
+    from user_store import is_new_user, mark_user_seen
+    from top_notify_store import add_top_notify_user, remove_top_notify_user, load_top_notify_users
+    
+    from tvDatafeed import TvDatafeed, Interval
+
+except ImportError as e:
+    logger.critical(f"❌ IMPORT ERROR: {e}")
+    logger.critical("ตรวจสอบว่าไฟล์ครบหรือไม่: strategy.py, guide.py, *_store.py")
     exit(1)
 
 # ======================
-# 🛠 HELPER FUNCTION (On-Demand Scan)
+# 🌐 DUMMY SERVER (กัน Choreo หลับ)
+# ======================
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is active!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    logger.info(f"🌍 Dummy Server running on port {port}")
+    server.serve_forever()
+
+# ======================
+# 🛠 HELPER FUNCTIONS
 # ======================
 async def execute_scan_command(update: Update, scan_func, get_text_func, market_name: str):
-    status_msg = await update.message.reply_text(f"⏳ กำลังสแกน *{market_name}* (Day) ล่าสุด... (อาจใช้เวลา 1-2 นาที)", parse_mode="Markdown")
+    msg = await update.message.reply_text(f"⏳ กำลังสแกน *{market_name}*...", parse_mode="Markdown")
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, scan_func)
-        result_text = get_text_func()
-        await status_msg.edit_text(result_text, parse_mode="Markdown")
+        result = get_text_func()
+        await msg.edit_text(result, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Scan Error ({market_name}): {e}")
-        await status_msg.edit_text(f"❌ Error Scanning {market_name}: {e}")
+        await msg.edit_text(f"❌ เกิดข้อผิดพลาด: {e}")
 
-# ======================
-# BASIC COMMANDS
-# ======================
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"🔥 Update {update} caused error: {context.error}")
 
+# ======================
+# 🎮 BOT COMMANDS
+# ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if is_new_user(update.effective_chat.id):
@@ -85,171 +108,140 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(get_user_guide(), parse_mode="Markdown")
 
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # เช็คว่าผู้ใช้พิมพ์ถูกรูปแบบไหม
     if not context.args or len(context.args) < 2:
-        await update.message.reply_text("❌ ใช้คำสั่งผิดรูปแบบ\nพิมพ์: `/signal BTCUSDT BINANCE`", parse_mode="Markdown")
+        await update.message.reply_text("❌ ใช้คำสั่งผิด\nตัวอย่าง: `/signal BTCUSDT BINANCE`", parse_mode="Markdown")
         return
 
     symbol = context.args[0].upper()
     exchange = context.args[1].upper()
-    
-    await update.message.reply_text(f"⏳ กำลังวิเคราะห์ {symbol} ({exchange})...")
+    status_msg = await update.message.reply_text(f"⏳ กำลังวิเคราะห์ {symbol}...")
 
     chart_path = None
     try:
         loop = asyncio.get_running_loop()
-        # รันการคำนวณใน Thread แยก เพื่อไม่ให้บอทค้าง
         result = await loop.run_in_executor(None, run_strategy, symbol, exchange)
         
+        await status_msg.delete() # ลบข้อความกำลังโหลด
         await update.message.reply_text(result["text"], parse_mode="Markdown")
 
         chart_path = result.get("chart")
         if chart_path and os.path.exists(chart_path):
             with open(chart_path, "rb") as photo:
                 await update.message.reply_photo(photo)
-        else:
-            logger.warning(f"Chart not found for {symbol}")
+        elif chart_path:
+            logger.warning(f"Chart path exists in result but file not found: {chart_path}")
 
     except Exception as e:
         logger.error(f"Signal Error: {e}")
         await update.message.reply_text(f"❌ เกิดข้อผิดพลาด: {e}")
     finally:
+        # ลบไฟล์ภาพเพื่อประหยัดพื้นที่
         if chart_path and os.path.exists(chart_path):
             try: os.remove(chart_path)
             except: pass
 
 async def alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or len(context.args) != 4:
-        return await update.message.reply_text("❌ ตัวอย่าง: /alert BTCUSDT BINANCE above 50000")
+        return await update.message.reply_text("❌ ตัวอย่าง: `/alert BTCUSDT BINANCE above 50000`", parse_mode="Markdown")
     
-    symbol, exchange, direction, price = context.args
-    try: price = float(price)
-    except: return await update.message.reply_text("❌ ราคาไม่ถูกต้อง")
-
-    alerts = load_alerts()
-    alerts.append({
-        "chat_id": update.effective_chat.id,
-        "symbol": symbol.upper(),
-        "exchange": exchange.upper(),
-        "direction": direction.lower(),
-        "price": price
-    })
-    save_alerts(alerts)
-    await update.message.reply_text(f"🔔 ตั้งเตือน {symbol} {direction} {price} สำเร็จ")
+    try:
+        symbol, exchange, direction, price = context.args
+        price = float(price)
+        
+        alerts = load_alerts()
+        alerts.append({
+            "chat_id": update.effective_chat.id,
+            "symbol": symbol.upper(),
+            "exchange": exchange.upper(),
+            "direction": direction.lower(),
+            "price": price
+        })
+        save_alerts(alerts)
+        await update.message.reply_text(f"🔔 ตั้งเตือน {symbol} {direction} {price} สำเร็จ")
+    except ValueError:
+        await update.message.reply_text("❌ ราคาต้องเป็นตัวเลข")
+    except Exception as e:
+        logger.error(f"Alert Error: {e}")
+        await update.message.reply_text("❌ เกิดข้อผิดพลาดในการบันทึก")
 
 async def auto_check_alerts(context: ContextTypes.DEFAULT_TYPE):
-    tv = TvDatafeed()
     alerts = load_alerts()
+    if not alerts: return
+
+    tv = TvDatafeed()
     remaining = alerts.copy()
+    
     for alert in alerts:
         try:
             df = tv.get_hist(symbol=alert["symbol"], exchange=alert["exchange"], interval=Interval.in_1_minute, n_bars=1)
-            if df is None: continue
+            if df is None or df.empty: continue
+            
             cur = df.iloc[-1]["close"]
-            hit = (alert["direction"]=="above" and cur>=alert["price"]) or (alert["direction"]=="below" and cur<=alert["price"])
+            hit = (alert["direction"]=="above" and cur>=alert["price"]) or \
+                  (alert["direction"]=="below" and cur<=alert["price"])
+            
             if hit:
                 await context.bot.send_message(alert["chat_id"], format_alert_message(alert, cur), parse_mode="Markdown")
                 remaining = remove_alert(remaining, alert)
-        except Exception as e: 
-            logger.error(f"Alert Check Error: {e}")
-    save_alerts(remaining)
+        except Exception as e:
+            logger.error(f"Check Alert Error ({alert['symbol']}): {e}")
+    
+    if len(remaining) != len(alerts):
+        save_alerts(remaining)
 
 # ======================
-# 🏆 TOP COMMANDS
+# WRAPPERS & JOBS
 # ======================
-async def top_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await execute_scan_command(update, scan_top_crypto_symbols, get_top_crypto_text, "Crypto Buy")
-async def top_th(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await execute_scan_command(update, scan_top_th_symbols, get_top_th_text, "หุ้นไทย Buy")
-async def top_cn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await execute_scan_command(update, scan_top_cn_symbols, get_top_cn_text, "หุ้นจีน Buy")
-async def top_hk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await execute_scan_command(update, scan_top_hk_symbols, get_top_hk_text, "หุ้นฮ่องกง Buy")
-async def top_us(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await execute_scan_command(update, scan_top_us_stock_symbols, get_top_us_stock_text, "หุ้น US Buy")
-async def top_global(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def top_crypto(u, c): await execute_scan_command(u, scan_top_crypto_symbols, get_top_crypto_text, "Crypto Buy")
+async def top_th(u, c): await execute_scan_command(u, scan_top_th_symbols, get_top_th_text, "TH Buy")
+async def top_cn(u, c): await execute_scan_command(u, scan_top_cn_symbols, get_top_cn_text, "CN Buy")
+async def top_hk(u, c): await execute_scan_command(u, scan_top_hk_symbols, get_top_hk_text, "HK Buy")
+async def top_us(u, c): await execute_scan_command(u, scan_top_us_stock_symbols, get_top_us_stock_text, "US Buy")
+async def top_global(u, c): 
     text = get_global_top_text()
-    if "กำลังสแกน" in text:
-        await update.message.reply_text("⏳ ข้อมูล Global ยังไม่พร้อม รอระบบอัปเดตสักครู่...", parse_mode="Markdown")
-    else:
-        await update.message.reply_text(text, parse_mode="Markdown")
+    if "กำลังสแกน" in text: await u.message.reply_text("⏳ ข้อมูล Global กำลังอัปเดต...", parse_mode="Markdown")
+    else: await u.message.reply_text(text, parse_mode="Markdown")
 
-async def top_sell_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await execute_scan_command(update, scan_top_crypto_sell_symbols, get_top_crypto_sell_text, "Crypto Sell")
-async def top_sell_th(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await execute_scan_command(update, scan_top_th_sell_symbols, get_top_th_sell_text, "หุ้นไทย Sell")
-async def top_sell_cn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await execute_scan_command(update, scan_top_cn_sell_symbols, get_top_cn_sell_text, "หุ้นจีน Sell")
-async def top_sell_hk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await execute_scan_command(update, scan_top_hk_sell_symbols, get_top_hk_sell_text, "หุ้นฮ่องกง Sell")
-async def top_sell_us(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await execute_scan_command(update, scan_top_us_stock_sell_symbols, get_top_us_stock_sell_text, "หุ้น US Sell")
-async def top_sell_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def top_sell_crypto(u, c): await execute_scan_command(u, scan_top_crypto_sell_symbols, get_top_crypto_sell_text, "Crypto Sell")
+async def top_sell_th(u, c): await execute_scan_command(u, scan_top_th_sell_symbols, get_top_th_sell_text, "TH Sell")
+async def top_sell_cn(u, c): await execute_scan_command(u, scan_top_cn_sell_symbols, get_top_cn_sell_text, "CN Sell")
+async def top_sell_hk(u, c): await execute_scan_command(u, scan_top_hk_sell_symbols, get_top_hk_sell_text, "HK Sell")
+async def top_sell_us(u, c): await execute_scan_command(u, scan_top_us_stock_sell_symbols, get_top_us_stock_sell_text, "US Sell")
+async def top_sell_all(u, c): 
     text = get_global_sell_text()
-    if "กำลังสแกน" in text:
-        await update.message.reply_text("⏳ ข้อมูล Global Sell ยังไม่พร้อม รอระบบอัปเดตสักครู่...", parse_mode="Markdown")
-    else:
-        await update.message.reply_text(text, parse_mode="Markdown")
+    if "กำลังสแกน" in text: await u.message.reply_text("⏳ ข้อมูล Global Sell กำลังอัปเดต...", parse_mode="Markdown")
+    else: await u.message.reply_text(text, parse_mode="Markdown")
 
-# ======================
-# 🔔 NOTIFICATIONS
-# ======================
-async def top_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    add_top_notify_user(update.effective_chat.id)
-    await update.message.reply_text("🔔 เปิดแจ้งเตือนรายวัน (09:00)")
-async def top_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    remove_top_notify_user(update.effective_chat.id)
-    await update.message.reply_text("🔕 ปิดแจ้งเตือนแล้ว")
+async def top_on(u, c): add_top_notify_user(u.effective_chat.id); await u.message.reply_text("🔔 เปิดแจ้งเตือน 09:00")
+async def top_off(u, c): remove_top_notify_user(u.effective_chat.id); await u.message.reply_text("🔕 ปิดแจ้งเตือน")
+
+async def scan_market_job(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("⚙️ Job: Heavy Scan Started")
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, run_heavy_scan_all_markets)
+    logger.info("✅ Job: Heavy Scan Completed")
 
 async def send_daily_top(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("⏰ Running Daily Notify...")
+    logger.info("⏰ Job: Sending Daily Notify")
     users = load_top_notify_users()
     if not users: return
     
-    parts = ["🌅 *DAILY GLOBAL MARKET* 🌅\n_(คัดหุ้น 200 ตัวแรก/ตลาด จากราคาปิดเมื่อวาน)_"]
+    parts = ["🌅 *DAILY MARKET*"]
+    buy = get_global_top_text()
+    if "กำลังสแกน" not in buy: parts.append(buy)
     
-    buy_txt = get_global_top_text()
-    if "กำลังสแกน" not in buy_txt: parts.append(buy_txt)
-    
-    sell_txt = get_global_sell_text()
-    if "กำลังสแกน" not in sell_txt: parts.append(sell_txt)
-    
-    msg = "\n\n━━━━━━━━━━━━━━\n\n".join(parts)
+    msg = "\n\n".join(parts)
     for uid in users:
         try: await context.bot.send_message(uid, msg, parse_mode="Markdown")
-        except Exception as e: logger.error(f"Failed to send daily top to {uid}: {e}")
-
-# ======================
-# ⚙️ BACKGROUND JOB
-# ======================
-async def scan_market_job(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("⚙️ Starting Daily Heavy Scan...")
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, run_heavy_scan_all_markets)
-    logger.info("✅ Daily Heavy Scan Completed")
-
-# ======================
-# 🌐 DUMMY SERVER
-# ======================
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b"Bot is running OK!")
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    logger.info(f"🌍 Dummy Server running on port {port}")
-    server.serve_forever()
+        except: pass
 
 # ======================
 # MAIN
 # ======================
 def main():
+    # เริ่ม Dummy Server
     threading.Thread(target=run_web_server, daemon=True).start()
-    
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     # Handlers
@@ -278,11 +270,11 @@ def main():
 
     # Job Queue
     TH_TZ = timezone(timedelta(hours=7))
-    app.job_queue.run_repeating(auto_check_alerts, interval=120, first=10, name="auto_alert")
-    app.job_queue.run_daily(scan_market_job, time=time(hour=5, minute=30, tzinfo=TH_TZ), name="daily_heavy_scan")
-    app.job_queue.run_daily(send_daily_top, time=time(hour=9, minute=0, tzinfo=TH_TZ), name="daily_notify")
+    app.job_queue.run_repeating(auto_check_alerts, interval=120, first=10)
+    app.job_queue.run_daily(scan_market_job, time=time(hour=5, minute=30, tzinfo=TH_TZ))
+    app.job_queue.run_daily(send_daily_top, time=time(hour=9, minute=0, tzinfo=TH_TZ))
 
-    logger.info("🤖 Bot Started | Daily Scan @ 05:30 | Notify @ 09:00")
+    logger.info("🤖 Bot Started Ready!")
     app.run_polling()
 
 if __name__ == "__main__":

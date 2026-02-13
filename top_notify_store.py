@@ -1,17 +1,17 @@
 import json
 import os
 
-FILE = "top_notify.json"
+FILE = "/tmp/data/notify_users.json"
 
 def load_top_notify_users():
-    if not os.path.exists(FILE):
-        return []
-    with open(FILE, "r") as f:
-        return json.load(f)
+    if not os.path.exists(FILE): return []
+    try:
+        with open(FILE, "r") as f: return json.load(f)
+    except: return []
 
 def save_top_notify_users(users):
-    with open(FILE, "w") as f:
-        json.dump(users, f)
+    os.makedirs(os.path.dirname(FILE), exist_ok=True)
+    with open(FILE, "w") as f: json.dump(users, f)
 
 def add_top_notify_user(chat_id):
     users = load_top_notify_users()

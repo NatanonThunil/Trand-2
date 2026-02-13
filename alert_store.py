@@ -1,26 +1,21 @@
 import json
 import os
 
-FILE = "alerts.json"
+FILE = "/tmp/data/alerts.json"
 
-
-# ======================
-# LOAD ALERTS
-# ======================
 def load_alerts():
-    if not os.path.exists(FILE):
-        return []
-    with open(FILE, "r") as f:
-        return json.load(f)
+    if not os.path.exists(FILE): return []
+    try:
+        with open(FILE, "r") as f: return json.load(f)
+    except: return []
 
-
-# ======================
-# SAVE ALERTS
-# ======================
 def save_alerts(alerts):
-    with open(FILE, "w") as f:
-        json.dump(alerts, f, indent=2)
+    # ✅ เพิ่มบรรทัดนี้: สร้างโฟลเดอร์ก่อนเสมอ
+    os.makedirs(os.path.dirname(FILE), exist_ok=True)
+    with open(FILE, "w") as f: json.dump(alerts, f, indent=2)
 
+def remove_alert(alerts, item):
+    return [a for a in alerts if a != item]
 
 # ======================
 # FORMAT ALERT MESSAGE
