@@ -309,8 +309,10 @@ def run_strategy(SYMBOL, EXCHANGE):
     plt.title(f"{SYMBOL} Strategy Result (ROI: {roi:.2f}%)")
     plt.legend(); plt.grid(True, alpha=0.3)
     
-    os.makedirs("charts", exist_ok=True)
-    chart_path = f"charts/{SYMBOL}_backtest.png"
+    BASE_DIR = "/tmp"
+    chart_dir = os.path.join(BASE_DIR, "charts")
+    os.makedirs(chart_dir, exist_ok=True)
+    chart_path = os.path.join(chart_dir, f"{SYMBOL}_backtest.png")
     plt.savefig(chart_path)
     plt.close('all')
 
