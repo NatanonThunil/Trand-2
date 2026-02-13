@@ -1,6 +1,7 @@
 import json
 import os
 
+# ✅ ต้องมี /tmp/data/ นำหน้า
 FILE = "/tmp/data/notify_users.json"
 
 def load_top_notify_users():
