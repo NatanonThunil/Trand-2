@@ -2,6 +2,7 @@ import asyncio
 from datetime import time, timezone, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from guide import get_user_guide
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
@@ -287,7 +288,7 @@ def run_web_server():
 # MAIN
 # ======================
 def main():
-    # ✅ 1. สั่งรัน Web Server ใน Thread แยก (เพื่อให้บอทกับเว็บทำงานพร้อมกัน)
+
     threading.Thread(target=run_web_server, daemon=True).start()
     
     app = ApplicationBuilder().token(BOT_TOKEN).build()
