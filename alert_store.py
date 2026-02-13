@@ -4,6 +4,9 @@ import os
 # ✅ ต้องมี /tmp/data/ นำหน้า
 FILE = "/tmp/data/alerts.json"
 
+# --- เพิ่มบรรทัดนี้ ---
+print(f"🟢 ALERT STORE LOADED: Using file path -> {FILE}")
+
 def load_alerts():
     if not os.path.exists(FILE): return []
     try:
