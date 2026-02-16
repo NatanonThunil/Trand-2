@@ -91,12 +91,14 @@ async def execute_scan_command(update: Update, scan_func, get_text_func, market_
     start_msg = f"📡 *INITIALIZING SCAN...*\n🔍 Target: *{market_name}*\n\n`[░░░░░░░░░░] 0%`"
     status_msg = await update.message.reply_text(start_msg, parse_mode="Markdown")
     
+    # ตัวแปรสำหรับคุมความถี่การอัปเดต (Telegram จำกัดการ Edit)
     last_update_time = 0
     loop = asyncio.get_running_loop()
 
+    # ฟังก์ชัน Callback ที่จะถูกเรียกจาก strategy.py ใน Thread แยก
     def progress_callback(current, total):
         nonlocal last_update_time
-        # อัปเดตทุก 2.5 วินาที (เพื่อให้เห็นหลอดขยับเนียนขึ้น) หรือเมื่อเสร็จ
+        # อัปเดตทุกๆ 2.5 วินาที หรือเมื่อเสร็จ
         if time.time() - last_update_time > 2.5 or current == total:
             percent = int((current / total) * 100)
             bar = make_progress_bar(percent, length=12) # สร้างหลอดความยาว 12 ช่อง
@@ -111,6 +113,7 @@ async def execute_scan_command(update: Update, scan_func, get_text_func, market_
             )
             
             try:
+                # สั่งให้ Event Loop ของบอททำงานอัปเดตข้อความ (Thread-safe)
                 asyncio.run_coroutine_threadsafe(
                     status_msg.edit_text(text, parse_mode="Markdown"), 
                     loop
@@ -119,16 +122,16 @@ async def execute_scan_command(update: Update, scan_func, get_text_func, market_
             last_update_time = time.time()
 
     try:
+        # ✅ รันฟังก์ชันสแกนใน Thread แยก (Executor) เพื่อให้ Main Loop ไม่ค้าง
+        # บอทจะยังรับคำสั่งอื่นได้ระหว่างบรรทัดนี้ทำงาน
         await loop.run_in_executor(None, lambda: scan_func(callback=progress_callback))
         
-        # ✅ เมื่อเสร็จแล้ว ให้เปลี่ยนเป็นผลลัพธ์
+        # เมื่อเสร็จแล้ว ดึงข้อความสรุปมาแสดง
         result_text = get_text_func()
         await status_msg.edit_text(result_text, parse_mode="Markdown")
-        
     except Exception as e:
         logger.error(f"Scan Error ({market_name}): {e}")
-        await status_msg.edit_text(f"❌ *SYSTEM ERROR*\n`{e}`", parse_mode="Markdown")
-        
+        await status_msg.edit_text(f"❌ เกิดข้อผิดพลาด: {e}")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"🔥 Update {update} caused error: {context.error}")
