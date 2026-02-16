@@ -75,9 +75,9 @@ def run_web_server():
         logger.warning(f"⚠️ Web Server Start Failed: {e}")
 
 # ======================
-# 🎨 UI HELPERS
+# 🎨 UI HELPERS (Progress Bar)
 # ======================
-def make_progress_bar(percent, length=10):
+def make_progress_bar(percent, length=12):
     """สร้างหลอดโหลดแบบ Text: [█████░░░░░]"""
     filled_length = int(length * percent // 100)
     bar = '█' * filled_length + '░' * (length - filled_length)
@@ -87,9 +87,9 @@ def make_progress_bar(percent, length=10):
 # 🛠 HELPER (SCAN + PROGRESS) -> แก้จุดนี้เพื่อให้ Non-blocking
 # ======================
 async def execute_scan_command(update: Update, scan_func, get_text_func, market_name: str):
-    # ข้อความเริ่มต้นแบบเท่ๆ
-    start_msg = f"📡 *INITIALIZING SCAN...*\n🔍 Target: *{market_name}*\n\n`[░░░░░░░░░░] 0%`"
-    status_msg = await update.message.reply_text(start_msg, parse_mode="Markdown")
+    # ส่งข้อความเริ่มต้นพร้อม Progress Bar 0%
+    start_msg_text = f"📡 *INITIALIZING SCAN...*\n🔍 Target: *{market_name}*\n\n`[░░░░░░░░░░░░] 0%`"
+    status_msg = await update.message.reply_text(start_msg_text, parse_mode="Markdown")
     
     # ตัวแปรสำหรับคุมความถี่การอัปเดต (Telegram จำกัดการ Edit)
     last_update_time = 0
@@ -98,12 +98,12 @@ async def execute_scan_command(update: Update, scan_func, get_text_func, market_
     # ฟังก์ชัน Callback ที่จะถูกเรียกจาก strategy.py ใน Thread แยก
     def progress_callback(current, total):
         nonlocal last_update_time
-        # อัปเดตทุกๆ 2.5 วินาที หรือเมื่อเสร็จ
+        # อัปเดตทุกๆ 2.5 วินาที หรือเมื่อเสร็จ (เพื่อความเนียน)
         if time.time() - last_update_time > 2.5 or current == total:
             percent = int((current / total) * 100)
-            bar = make_progress_bar(percent, length=12) # สร้างหลอดความยาว 12 ช่อง
+            bar = make_progress_bar(percent, length=12) # สร้างหลอด
             
-            # ✨ ดีไซน์ข้อความใหม่ ✨
+            # ข้อความอัปเดตสวยๆ
             text = (
                 f"📡 *SCANNING MARKET...*\n"
                 f"🎯 Target: *{market_name}*\n"
@@ -131,7 +131,7 @@ async def execute_scan_command(update: Update, scan_func, get_text_func, market_
         await status_msg.edit_text(result_text, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Scan Error ({market_name}): {e}")
-        await status_msg.edit_text(f"❌ เกิดข้อผิดพลาด: {e}")
+        await status_msg.edit_text(f"❌ *SYSTEM ERROR*\n`{e}`", parse_mode="Markdown")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"🔥 Update {update} caused error: {context.error}")

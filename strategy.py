@@ -45,7 +45,6 @@ def get_stock_symbols_scanner(region="thailand", limit=5000):
         "sort": {"sortBy": "volume", "sortOrder": "desc"},
         "range": [0, limit]
     }
-    # Config filters...
     if region == "thailand": payload["filter"].append({"left": "exchange", "operation": "equal", "right": "SET"})
     elif region == "hongkong": payload["filter"].append({"left": "exchange", "operation": "equal", "right": "HKEX"})
     elif region == "china": payload["filter"].append({"left": "exchange", "operation": "in_range", "right": ["SSE", "SZSE"]})
@@ -92,7 +91,7 @@ def analyze_chart(df, mode="BUY"):
     return score, reasons, close.iloc[-1]
 
 # =====================
-# 🚀 SCANNER ENGINE (MODIFIED FOR PROGRESS)
+# 🚀 SCANNER ENGINE (Updated with Callback)
 # =====================
 def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", limit=500, callback=None):
     targets = get_stock_symbols_scanner(scanner_region, limit=limit)
@@ -102,7 +101,7 @@ def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", lim
     print(f"Scanning {region_name} {mode} ({total})...")
     
     for i, (symbol, exchange) in enumerate(targets):
-        # ✅ เรียก Callback เพื่อส่ง % กลับไปที่ bot.py
+        # ✅ เรียก Callback ส่ง % กลับไปหา Bot
         if callback: callback(i, total)
         
         try:
@@ -111,7 +110,7 @@ def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", lim
             score, reasons, price = analyze_chart(df, mode=mode)
             if score >= 3:
                 results.append({ "symbol": symbol, "exchange": exchange, "price": price, "score": score, "reasons": reasons, "region": region_name })
-            time.sleep(0.01)
+            time.sleep(0.01) # Sleep นิดหน่อยเพื่อให้ CPU หายใจ (ช่วยให้ Non-blocking ดีขึ้น)
         except: continue
 
     cache_dict["updated_at"] = datetime.now()
@@ -141,7 +140,7 @@ def _scan_crypto(cache_dict, mode="BUY", limit=100, callback=None):
     cache_dict["results"] = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
     return results
 
-# Wrappers (Updated to accept callback)
+# Wrappers (รับ callback เพิ่ม)
 def scan_top_th_symbols(limit=500, callback=None): return scan_generic_market("🇹🇭 TH", "thailand", TOP_CACHE_TH, "BUY", limit, callback)
 def scan_top_cn_symbols(limit=500, callback=None): return scan_generic_market("🇨🇳 CN", "china", TOP_CACHE_CN, "BUY", limit, callback)
 def scan_top_hk_symbols(limit=500, callback=None): return scan_generic_market("🇭🇰 HK", "hongkong", TOP_CACHE_HK, "BUY", limit, callback)
@@ -155,7 +154,7 @@ def scan_top_us_stock_sell_symbols(limit=500, callback=None): return scan_generi
 def scan_top_crypto_sell_symbols(limit=100, callback=None): return _scan_crypto(TOP_SELL_CACHE_CRYPTO, "SELL", limit, callback)
 
 # =====================
-# 🔨 HEAVY SCAN (Updated)
+# 🔨 HEAVY SCAN
 # =====================
 def run_scan_asia_market():
     print("🚀 [Job] Scanning ASIA Market (CN+HK) 10k...")
@@ -178,11 +177,10 @@ def run_scan_us_market():
     GLOBAL_DATA_SELL_STORE["US"] = scan_top_us_stock_sell_symbols(limit=10000)
     GLOBAL_DATA_SELL_STORE["CRYPTO"] = scan_top_crypto_sell_symbols(limit=500)
     GLOBAL_LAST_UPDATE["time"] = datetime.now()
-    
+
 # =====================
 # 📝 FORMATTERS
 # =====================
-
 def format_top_text(title, cache_data, decimals=2, is_sell=False):
     if not cache_data["results"]: return f"⏳ ข้อมูล {title} ยังไม่พร้อม..."
     icon = "🔴" if is_sell else "🏆"
