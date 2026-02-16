@@ -4,7 +4,7 @@ import os
 import threading
 from datetime import time, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import socket # เพิ่ม import socket
+import socket
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -35,11 +35,14 @@ try:
 
     from strategy import (
         run_strategy,
+        # Scanners
         scan_top_th_symbols, scan_top_cn_symbols, scan_top_hk_symbols, scan_top_us_stock_symbols, scan_top_crypto_symbols,
         scan_top_th_sell_symbols, scan_top_cn_sell_symbols, scan_top_hk_sell_symbols, scan_top_us_stock_sell_symbols, scan_top_crypto_sell_symbols,
+        # Getters
         get_top_th_text, get_top_cn_text, get_top_hk_text, get_top_us_stock_text, get_top_crypto_text, get_global_top_text,
         get_top_th_sell_text, get_top_cn_sell_text, get_top_hk_sell_text, get_top_us_stock_sell_text, get_top_crypto_sell_text, get_global_sell_text,
-        run_heavy_scan_all_markets
+        # Heavy Jobs (Functions ที่เราแยกใหม่)
+        run_scan_asia_market, run_scan_th_market, run_scan_us_market
     )
     
     from alert_store import load_alerts, save_alerts, remove_alert, format_alert_message
@@ -52,7 +55,7 @@ except ImportError as e:
     exit(1)
 
 # ======================
-# 🌐 DUMMY SERVER (แบบปลอดภัย รันได้ทั้ง Windows/Cloud)
+# 🌐 DUMMY SERVER
 # ======================
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -62,16 +65,13 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is active!")
 
 def run_web_server():
-    # ถ้ามี ENV PORT (บน Cloud) ให้ใช้ค่าบั้น ถ้าไม่มี (บนคอม) ให้ลอง 8080 หรือสุ่ม
     port = int(os.environ.get("PORT", 8080))
-    
     try:
         server = HTTPServer(('0.0.0.0', port), SimpleHandler)
         logger.info(f"🌍 Dummy Server running on port {port}")
         server.serve_forever()
     except OSError as e:
-        # ถ้า Port ชน (WinError 10013) ให้ข้ามไปเลย ไม่ต้อง Crash
-        logger.warning(f"⚠️ Web Server Start Failed (ไม่ส่งผลต่อบอท): {e}")
+        logger.warning(f"⚠️ Web Server Start Failed: {e}")
 
 # ======================
 # 🛠 HELPER FUNCTIONS
@@ -129,7 +129,6 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_photo(photo)
     
     except ValueError as ve:
-        # จับ Error เฉพาะเรื่อง float ที่คุณเจอ
         logger.error(f"Signal Value Error: {ve}")
         await update.message.reply_text(f"❌ ข้อมูลกราฟผิดพลาด (TvDatafeed คืนค่าแปลกๆ)\nError: {ve}")
         
@@ -191,7 +190,7 @@ async def auto_check_alerts(context: ContextTypes.DEFAULT_TYPE):
         save_alerts(remaining)
 
 # ======================
-# WRAPPERS & JOBS
+# WRAPPERS & JOBS (แก้ไขส่วนนี้)
 # ======================
 async def top_crypto(u, c): await execute_scan_command(u, scan_top_crypto_symbols, get_top_crypto_text, "Crypto Buy")
 async def top_th(u, c): await execute_scan_command(u, scan_top_th_symbols, get_top_th_text, "TH Buy")
@@ -200,7 +199,7 @@ async def top_hk(u, c): await execute_scan_command(u, scan_top_hk_symbols, get_t
 async def top_us(u, c): await execute_scan_command(u, scan_top_us_stock_symbols, get_top_us_stock_text, "US Buy")
 async def top_global(u, c): 
     text = get_global_top_text()
-    if "กำลังสแกน" in text: await u.message.reply_text("⏳ ข้อมูล Global กำลังอัปเดต...", parse_mode="Markdown")
+    if "กำลังสแกน" in text: await u.message.reply_text("⏳ ข้อมูล Global กำลังรอรอบสแกน...", parse_mode="Markdown")
     else: await u.message.reply_text(text, parse_mode="Markdown")
 
 async def top_sell_crypto(u, c): await execute_scan_command(u, scan_top_crypto_sell_symbols, get_top_crypto_sell_text, "Crypto Sell")
@@ -210,28 +209,39 @@ async def top_sell_hk(u, c): await execute_scan_command(u, scan_top_hk_sell_symb
 async def top_sell_us(u, c): await execute_scan_command(u, scan_top_us_stock_sell_symbols, get_top_us_stock_sell_text, "US Sell")
 async def top_sell_all(u, c): 
     text = get_global_sell_text()
-    if "กำลังสแกน" in text: await u.message.reply_text("⏳ ข้อมูล Global Sell กำลังอัปเดต...", parse_mode="Markdown")
+    if "กำลังสแกน" in text: await u.message.reply_text("⏳ ข้อมูล Global Sell กำลังรอรอบสแกน...", parse_mode="Markdown")
     else: await u.message.reply_text(text, parse_mode="Markdown")
 
-async def top_on(u, c): add_top_notify_user(u.effective_chat.id); await u.message.reply_text("🔔 เปิดแจ้งเตือน 09:00")
+async def top_on(u, c): add_top_notify_user(u.effective_chat.id); await u.message.reply_text("🔔 เปิดแจ้งเตือน 08:00")
 async def top_off(u, c): remove_top_notify_user(u.effective_chat.id); await u.message.reply_text("🔕 ปิดแจ้งเตือน")
 
-async def scan_market_job(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("⚙️ Job: Heavy Scan Started")
+# --- SEPARATE JOBS ---
+async def job_scan_asia(context):
+    logger.info("🇨🇳 Job: Scanning ASIA Market (CN+HK)...")
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, run_heavy_scan_all_markets)
-    logger.info("✅ Job: Heavy Scan Completed")
+    await loop.run_in_executor(None, run_scan_asia_market)
+    logger.info("✅ ASIA Scan Complete")
+
+async def job_scan_th(context):
+    logger.info("🇹🇭 Job: Scanning TH Market...")
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, run_scan_th_market)
+    logger.info("✅ TH Scan Complete")
+
+async def job_scan_us(context):
+    logger.info("🇺🇸 Job: Scanning US Market + Crypto...")
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, run_scan_us_market)
+    logger.info("✅ US Scan Complete")
 
 async def send_daily_top(context: ContextTypes.DEFAULT_TYPE):
     logger.info("⏰ Job: Sending Daily Notify")
     users = load_top_notify_users()
     if not users: return
     
-    parts = ["🌅 *DAILY MARKET*"]
-    buy = get_global_top_text()
-    if "กำลังสแกน" not in buy: parts.append(buy)
+    # รวมข้อความ
+    msg = f"🌅 *DAILY MARKET BRIEF*\n\n{get_global_top_text()}\n\n{get_global_sell_text()}"
     
-    msg = "\n\n".join(parts)
     for uid in users:
         try: await context.bot.send_message(uid, msg, parse_mode="Markdown")
         except: pass
@@ -240,7 +250,6 @@ async def send_daily_top(context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ======================
 def main():
-    # ใช้ Try-Except ครอบเซิร์ฟเวอร์ ถ้าเปิดไม่ได้ก็ไม่ต้องตาย
     threading.Thread(target=run_web_server, daemon=True).start()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -269,11 +278,24 @@ def main():
     app.add_handler(CommandHandler("top_off", top_off))
     app.add_error_handler(error_handler)
 
-    # Job Queue
+    # ✅ Job Queue Setup (Timezone: Asia/Bangkok)
     TH_TZ = timezone(timedelta(hours=7))
-    app.job_queue.run_repeating(auto_check_alerts, interval=120, first=10)
-    app.job_queue.run_daily(scan_market_job, time=time(hour=5, minute=30, tzinfo=TH_TZ))
-    app.job_queue.run_daily(send_daily_top, time=time(hour=9, minute=0, tzinfo=TH_TZ))
+    jq = app.job_queue
+
+    # 1. หุ้นเอเชีย (CN/HK) ปิดบ่าย 3-4 -> สแกน 16:30
+    jq.run_daily(job_scan_asia, time=time(hour=16, minute=30, tzinfo=TH_TZ))
+
+    # 2. หุ้นไทย (TH) ปิด 16:30 -> สแกน 17:30 (เผื่อข้อมูล delay)
+    jq.run_daily(job_scan_th, time=time(hour=17, minute=30, tzinfo=TH_TZ))
+
+    # 3. หุ้น US ปิดตี 4 -> สแกน 05:00
+    jq.run_daily(job_scan_us, time=time(hour=5, minute=0, tzinfo=TH_TZ))
+
+    # 4. แจ้งเตือนสรุปตอน 8 โมงเช้า (ข้อมูลครบทุกตลาดแล้ว)
+    jq.run_daily(send_daily_top, time=time(hour=8, minute=0, tzinfo=TH_TZ))
+
+    # 5. Check Alert ถี่ๆ
+    jq.run_repeating(auto_check_alerts, interval=120, first=10)
 
     logger.info("🤖 Bot Started Ready!")
     app.run_polling()
