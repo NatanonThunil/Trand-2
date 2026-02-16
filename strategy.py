@@ -11,28 +11,20 @@ matplotlib.use('Agg')
 # =====================
 # 💾 CACHE STORAGE
 # =====================
-# Cache สำหรับการดูรายประเทศ (กด /top_th, /top_cn) -> เก็บ Top 5
 TOP_CACHE_TH = { "region": "TH", "updated_at": None, "results": [] }
 TOP_CACHE_CN = { "region": "CN", "updated_at": None, "results": [] }
 TOP_CACHE_HK = { "region": "HK", "updated_at": None, "results": [] }
 TOP_CACHE_US_STOCK = { "region": "US", "updated_at": None, "results": [] }
 TOP_CACHE_CRYPTO = { "exchange": "BINANCE", "updated_at": None, "results": [] }
 
-# Sell Caches
 TOP_SELL_CACHE_TH = { "region": "TH", "updated_at": None, "results": [] }
 TOP_SELL_CACHE_CN = { "region": "CN", "updated_at": None, "results": [] }
 TOP_SELL_CACHE_HK = { "region": "HK", "updated_at": None, "results": [] }
 TOP_SELL_CACHE_US_STOCK = { "region": "US", "updated_at": None, "results": [] }
 TOP_SELL_CACHE_CRYPTO = { "exchange": "BINANCE", "updated_at": None, "results": [] }
 
-# Cache ใหญ่สำหรับ Global Scan (10,000 ตัว)
-# แยก key เพื่อให้แต่ละ Job มาเติมข้อมูลได้โดยไม่ทับกัน
-GLOBAL_DATA_STORE = {
-    "TH": [], "CN": [], "HK": [], "US": [], "CRYPTO": []
-}
-GLOBAL_DATA_SELL_STORE = {
-    "TH": [], "CN": [], "HK": [], "US": [], "CRYPTO": []
-}
+GLOBAL_DATA_STORE = { "TH": [], "CN": [], "HK": [], "US": [], "CRYPTO": [] }
+GLOBAL_DATA_SELL_STORE = { "TH": [], "CN": [], "HK": [], "US": [], "CRYPTO": [] }
 GLOBAL_LAST_UPDATE = {"time": None}
 
 # =====================
@@ -81,17 +73,13 @@ def analyze_chart(df, mode="BUY"):
     ema_fast = close.ewm(span=9).mean().iloc[-1]
     ema_slow = close.ewm(span=21).mean().iloc[-1]
     
-    # Calculate RSI
     delta = close.diff()
     gain = delta.clip(lower=0); loss = -delta.clip(upper=0)
     rs = gain.rolling(14).mean() / loss.rolling(14).mean()
     rsi = 100 - (100 / (1 + rs.iloc[-1]))
-    
-    # Calculate ATR
     atr = pd.concat([df["high"]-df["low"], (df["high"]-close.shift()).abs(), (df["low"]-close.shift()).abs()], axis=1).max(axis=1).rolling(14).mean().iloc[-1]
     
     score = 0; reasons = []
-    
     if mode == "BUY":
         if ema_fast > ema_slow: score += 2; reasons.append("EMA Uptrend")
         if rsi > 55: score += 1; reasons.append(f"RSI Strong ({rsi:.0f})")
@@ -103,15 +91,19 @@ def analyze_chart(df, mode="BUY"):
     return score, reasons, close.iloc[-1]
 
 # =====================
-# 🚀 SCANNER ENGINE
+# 🚀 SCANNER ENGINE (Updated with Callback)
 # =====================
-def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", limit=500):
+def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", limit=500, callback=None):
     targets = get_stock_symbols_scanner(scanner_region, limit=limit)
     tv = TvDatafeed()
     results = []
-    print(f"Scanning {region_name} {mode} ({len(targets)})...")
+    total = len(targets)
+    print(f"Scanning {region_name} {mode} ({total})...")
     
-    for symbol, exchange in targets:
+    for i, (symbol, exchange) in enumerate(targets):
+        # ✅ เรียก Callback ส่ง % กลับไปหา Bot
+        if callback: callback(i, total)
+        
         try:
             if exchange == "SZSE": exchange = "SZSE"
             df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_hour, n_bars=100)
@@ -121,18 +113,22 @@ def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", lim
             time.sleep(0.01)
         except: continue
 
-    # อัปเดต Cache ย่อย (สำหรับกดดูรายตัว)
     cache_dict["updated_at"] = datetime.now()
     cache_dict["results"] = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
     print(f"✅ {region_name} Done.")
     return results
 
-def _scan_crypto(cache_dict, mode="BUY", limit=100):
+def _scan_crypto(cache_dict, mode="BUY", limit=100, callback=None):
     SYMBOLS = get_top_usdt_symbols_by_volume(limit=limit)
     tv = TvDatafeed()
     results = []
-    print(f"Scanning Crypto {mode} ({len(SYMBOLS)})...")
-    for symbol in SYMBOLS:
+    total = len(SYMBOLS)
+    print(f"Scanning Crypto {mode} ({total})...")
+    
+    for i, symbol in enumerate(SYMBOLS):
+        # ✅ เรียก Callback
+        if callback: callback(i, total)
+
         try:
             df = tv.get_hist(symbol=symbol, exchange="BINANCE", interval=Interval.in_1_hour, n_bars=100)
             score, reasons, price = analyze_chart(df, mode=mode)
@@ -144,45 +140,40 @@ def _scan_crypto(cache_dict, mode="BUY", limit=100):
     cache_dict["results"] = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
     return results
 
-# Wrappers (ใช้สำหรับคำสั่ง /top_xx ปกติ)
-def scan_top_th_symbols(limit=500): return scan_generic_market("🇹🇭 TH", "thailand", TOP_CACHE_TH, "BUY", limit)
-def scan_top_cn_symbols(limit=500): return scan_generic_market("🇨🇳 CN", "china", TOP_CACHE_CN, "BUY", limit)
-def scan_top_hk_symbols(limit=500): return scan_generic_market("🇭🇰 HK", "hongkong", TOP_CACHE_HK, "BUY", limit)
-def scan_top_us_stock_symbols(limit=500): return scan_generic_market("🇺🇸 US", "america", TOP_CACHE_US_STOCK, "BUY", limit)
-def scan_top_crypto_symbols(limit=100): return _scan_crypto(TOP_CACHE_CRYPTO, "BUY", limit)
+# Wrappers (รับ callback เพิ่ม)
+def scan_top_th_symbols(limit=500, callback=None): return scan_generic_market("🇹🇭 TH", "thailand", TOP_CACHE_TH, "BUY", limit, callback)
+def scan_top_cn_symbols(limit=500, callback=None): return scan_generic_market("🇨🇳 CN", "china", TOP_CACHE_CN, "BUY", limit, callback)
+def scan_top_hk_symbols(limit=500, callback=None): return scan_generic_market("🇭🇰 HK", "hongkong", TOP_CACHE_HK, "BUY", limit, callback)
+def scan_top_us_stock_symbols(limit=500, callback=None): return scan_generic_market("🇺🇸 US", "america", TOP_CACHE_US_STOCK, "BUY", limit, callback)
+def scan_top_crypto_symbols(limit=100, callback=None): return _scan_crypto(TOP_CACHE_CRYPTO, "BUY", limit, callback)
 
-def scan_top_th_sell_symbols(limit=500): return scan_generic_market("🇹🇭 TH", "thailand", TOP_SELL_CACHE_TH, "SELL", limit)
-def scan_top_cn_sell_symbols(limit=500): return scan_generic_market("🇨🇳 CN", "china", TOP_SELL_CACHE_CN, "SELL", limit)
-def scan_top_hk_sell_symbols(limit=500): return scan_generic_market("🇭🇰 HK", "hongkong", TOP_SELL_CACHE_HK, "SELL", limit)
-def scan_top_us_stock_sell_symbols(limit=500): return scan_generic_market("🇺🇸 US", "america", TOP_SELL_CACHE_US_STOCK, "SELL", limit)
-def scan_top_crypto_sell_symbols(limit=100): return _scan_crypto(TOP_SELL_CACHE_CRYPTO, "SELL", limit)
+def scan_top_th_sell_symbols(limit=500, callback=None): return scan_generic_market("🇹🇭 TH", "thailand", TOP_SELL_CACHE_TH, "SELL", limit, callback)
+def scan_top_cn_sell_symbols(limit=500, callback=None): return scan_generic_market("🇨🇳 CN", "china", TOP_SELL_CACHE_CN, "SELL", limit, callback)
+def scan_top_hk_sell_symbols(limit=500, callback=None): return scan_generic_market("🇭🇰 HK", "hongkong", TOP_SELL_CACHE_HK, "SELL", limit, callback)
+def scan_top_us_stock_sell_symbols(limit=500, callback=None): return scan_generic_market("🇺🇸 US", "america", TOP_SELL_CACHE_US_STOCK, "SELL", limit, callback)
+def scan_top_crypto_sell_symbols(limit=100, callback=None): return _scan_crypto(TOP_SELL_CACHE_CRYPTO, "SELL", limit, callback)
 
 # =====================
-# 🔨 HEAVY SCAN (แยกตามตลาด)
+# 🔨 HEAVY SCAN (Updated)
 # =====================
 def run_scan_asia_market():
-    # ตลาดจีน/ฮ่องกง ปิดบ่าย 3-4 โมง
     print("🚀 [Job] Scanning ASIA Market (CN+HK) 10k...")
     GLOBAL_DATA_STORE["CN"] = scan_top_cn_symbols(limit=10000)
     GLOBAL_DATA_STORE["HK"] = scan_top_hk_symbols(limit=10000)
-    
     GLOBAL_DATA_SELL_STORE["CN"] = scan_top_cn_sell_symbols(limit=10000)
     GLOBAL_DATA_SELL_STORE["HK"] = scan_top_hk_sell_symbols(limit=10000)
     GLOBAL_LAST_UPDATE["time"] = datetime.now()
 
 def run_scan_th_market():
-    # ตลาดไทย ปิด 16:30
     print("🚀 [Job] Scanning TH Market 10k...")
     GLOBAL_DATA_STORE["TH"] = scan_top_th_symbols(limit=10000)
     GLOBAL_DATA_SELL_STORE["TH"] = scan_top_th_sell_symbols(limit=10000)
     GLOBAL_LAST_UPDATE["time"] = datetime.now()
 
 def run_scan_us_market():
-    # ตลาด US ปิดตี 4
     print("🚀 [Job] Scanning US Market 10k + Crypto...")
     GLOBAL_DATA_STORE["US"] = scan_top_us_stock_symbols(limit=10000)
     GLOBAL_DATA_STORE["CRYPTO"] = scan_top_crypto_symbols(limit=500)
-    
     GLOBAL_DATA_SELL_STORE["US"] = scan_top_us_stock_sell_symbols(limit=10000)
     GLOBAL_DATA_SELL_STORE["CRYPTO"] = scan_top_crypto_sell_symbols(limit=500)
     GLOBAL_LAST_UPDATE["time"] = datetime.now()
@@ -190,6 +181,7 @@ def run_scan_us_market():
 # =====================
 # 📝 FORMATTERS
 # =====================
+
 def format_top_text(title, cache_data, decimals=2, is_sell=False):
     if not cache_data["results"]: return f"⏳ ข้อมูล {title} ยังไม่พร้อม..."
     icon = "🔴" if is_sell else "🏆"
@@ -213,31 +205,21 @@ def get_top_us_stock_sell_text(): return format_top_text("หุ้นอเม�
 def get_top_crypto_sell_text(): return format_top_text("CRYPTO SELL", TOP_SELL_CACHE_CRYPTO, decimals=4, is_sell=True)
 
 def get_global_top_text():
-    # รวมข้อมูลจากทุกตลาด (TH, CN, HK, US, CRYPTO)
     all_results = []
-    for market in GLOBAL_DATA_STORE:
-        all_results.extend(GLOBAL_DATA_STORE[market])
-    
+    for market in GLOBAL_DATA_STORE: all_results.extend(GLOBAL_DATA_STORE[market])
     if not all_results: return "⏳ ข้อมูล Global ยังไม่พร้อม (รอรอบสแกน)..."
-    
-    # เรียงตามคะแนน
     sorted_res = sorted(all_results, key=lambda x: x["score"], reverse=True)[:15]
     text = "🌍 *TOP 15 GLOBAL BUY* (All Markets)\n\n"
     for i, s in enumerate(sorted_res, 1):
         flag = s['region'].split(' ')[0]
         text += f"{flag} *{i}. {s['symbol']}* ({s['region']})\n💰 {s['price']:,.2f}\n\n"
-    
-    if GLOBAL_LAST_UPDATE["time"]:
-        text += f"🕒 Last Job: {GLOBAL_LAST_UPDATE['time'].strftime('%H:%M')}"
+    if GLOBAL_LAST_UPDATE["time"]: text += f"🕒 Last Job: {GLOBAL_LAST_UPDATE['time'].strftime('%H:%M')}"
     return text
 
 def get_global_sell_text():
     all_results = []
-    for market in GLOBAL_DATA_SELL_STORE:
-        all_results.extend(GLOBAL_DATA_SELL_STORE[market])
-    
+    for market in GLOBAL_DATA_SELL_STORE: all_results.extend(GLOBAL_DATA_SELL_STORE[market])
     if not all_results: return "⏳ ข้อมูล Global Sell ยังไม่พร้อม (รอรอบสแกน)..."
-    
     sorted_res = sorted(all_results, key=lambda x: x["score"], reverse=True)[:15]
     text = "📉 *TOP 15 GLOBAL SELL* (All Markets)\n\n"
     for i, s in enumerate(sorted_res, 1):
