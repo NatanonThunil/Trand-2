@@ -56,23 +56,26 @@ except ImportError as e:
     exit(1)
 
 # ======================
-# 🌐 DUMMY SERVER
+# 🌐 DUMMY SERVER 
 # ======================
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b"Bot is active!")
+        self.wfile.write(b"Bot is active!") # ข้อความตอบกลับว่าฉันยังอยู่นะ
 
 def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
+    # ⚠️ สำคัญ: Render จะส่ง PORT มาทาง Environment Variable ต้องรับค่านี้
+    port = int(os.environ.get("PORT", 8080)) 
+    
     try:
+        # ต้อง Bind ไปที่ 0.0.0.0 เท่านั้น (ห้ามใช้ localhost)
         server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-        logger.info(f"🌍 Dummy Server running on port {port}")
+        print(f"🌍 Dummy Server running on port {port}")
         server.serve_forever()
     except OSError as e:
-        logger.warning(f"⚠️ Web Server Start Failed: {e}")
+        print(f"⚠️ Web Server Error: {e}")
 
 # ======================
 # 🎨 UI HELPERS (Progress Bar)
@@ -242,4 +245,14 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    while True: # วนลูปไม่รู้จบ
+        try:
+            main() # รันบอท
+        except Exception as e:
+            print(f"🔥 CRITICAL ERROR: {e}")
+            print("🔄 Restarting bot in 10 seconds...")
+            import time
+            time.sleep(10) # รอ 10 วิแล้วเริ่มใหม่
+        except KeyboardInterrupt:
+            print("🛑 Bot stopped by user")
+            break
