@@ -360,17 +360,18 @@ def run_strategy(SYMBOL, EXCHANGE):
 
     # 🔥 สั่ง Plot กราฟแท่งเทียน!
     mpf.plot(
-        df_plot,
-        type='candle',          # ✅ หัวใจสำคัญ: สั่งให้เป็นแท่งเทียน
-        style=s,                # ใช้สไตล์ที่เรากำหนด
-        addplot=apds,           # เพิ่มเส้นอินดิเคเตอร์
-        volume=True,            # ✅ เพิ่มช่อง Volume ด้านล่างสุด
-        panel_ratios=(6, 2, 2), # อัตราส่วนความสูง: กราฟหลัก(6) : MACD(2) : Volume(2)
-        title=f"\n{SYMBOL} Professional Analysis (WinRate: {winrate:.1f}%)",
-        figsize=(12, 8),        # ขนาดภาพ
-        tight_layout=True,
-        savefig=chart_path      # บันทึกไฟล์โดยตรง
-    )
+            df_plot,
+            type='candle',
+            style=s,
+            addplot=apds,
+            volume=True,
+            volume_panel=2,         # <--- จุดสำคัญ: ย้าย Volume ไปช่องที่ 3 (index 2)
+            panel_ratios=(6, 2, 2), # สัดส่วน: กราฟหลัก(6) : MACD(2) : Volume(2)
+            title=f"\n{SYMBOL} Professional Chart (WinRate: {winrate:.1f}%)",
+            figsize=(12, 8),
+            tight_layout=True,
+            savefig=chart_path
+        )
 
     last = df.iloc[-1]
     trend_st = "BULLISH 🟢" if last['close'] > last['ema_200'] else "BEARISH 🔴"
