@@ -330,15 +330,13 @@ def run_strategy(SYMBOL, EXCHANGE):
     # ตัดข้อมูลมาแสดงผลแค่ 250 แท่งล่าสุด เพื่อความคมชัด
     df_plot = df.iloc[-250:].copy()
 
-    # เตรียมข้อมูลจุดซื้อขาย (ต้องให้ช่องที่ไม่มีสัญญาณเป็น NaN ไม่งั้นมันจะพลอตจุดมั่ว)
     buy_signals = df_plot['signal_price'].where(df_plot['signal'] == 1, np.nan)
     sell_signals = df_plot['signal_price'].where(df_plot['signal'] == -1, np.nan)
 
-    # สร้างการตั้งค่าเส้นเพิ่มเติม (AddPlots)
     apds = [
-        # Panel 0: Main Chart (EMA + Signals)
-        mpf.make_addplot(df_plot['ema_200'], color='purple', width=1.5, panel=0), # เส้นเทรนด์หลัก
-        mpf.make_addplot(df_plot['ema_fast'], color='cyan', width=0.8, panel=0),  # เส้นเร็ว
+        # Panel 0: Main (Price + EMA)
+        mpf.make_addplot(df_plot['ema_200'], color='purple', width=1.5, panel=0),
+        mpf.make_addplot(df_plot['ema_fast'], color='cyan', width=0.8, panel=0),
         mpf.make_addplot(buy_signals, type='scatter', markersize=100, marker='^', color='lime', panel=0),
         mpf.make_addplot(sell_signals, type='scatter', markersize=100, marker='v', color='red', panel=0),
         
@@ -348,37 +346,45 @@ def run_strategy(SYMBOL, EXCHANGE):
         mpf.make_addplot(df_plot['signal_line'], color='orange', width=1, panel=1),
     ]
 
-    # สร้าง Custom Style ให้ดู Modern
+    # Create Custom Style (Large Font + Clean Look)
     mc = mpf.make_marketcolors(up='green', down='red', edge='inherit', wick='inherit', volume='in')
-    s  = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', y_on_right=True, facecolor='white')
+    s  = mpf.make_mpf_style(
+        marketcolors=mc, 
+        gridstyle=':', 
+        y_on_right=True, 
+        facecolor='white',
+        rc={
+            'font.size': 12,
+            'axes.titlesize': 14,
+            'axes.labelsize': 10
+        }
+    )
 
-    # เตรียม Path ไฟล์
     BASE_DIR = "/tmp"
     chart_dir = os.path.join(BASE_DIR, "charts")
     os.makedirs(chart_dir, exist_ok=True)
     chart_path = os.path.join(chart_dir, f"{SYMBOL}_adv_candle.png")
 
-    # 🔥 สั่ง Plot กราฟแท่งเทียน!
+    # ✅ Layout Fix: Add Padding & Resize
     mpf.plot(
-            df_plot,
-            type='candle',
-            style=s,
-            addplot=apds,
-            volume=True,
-            volume_panel=2,         # <--- จุดสำคัญ: ย้าย Volume ไปช่องที่ 3 (index 2)
-            panel_ratios=(6, 2, 2), # สัดส่วน: กราฟหลัก(6) : MACD(2) : Volume(2)
-            title=f"\n{SYMBOL} Professional Chart (WinRate: {winrate:.1f}%)",
-            figsize=(12, 8),
-            tight_layout=True,
-            savefig=chart_path
-        )
+        df_plot,
+        type='candle',
+        style=s,
+        addplot=apds,
+        volume=True,
+        volume_panel=2,         # ย้าย Volume ไปล่างสุด (Index 2)
+        panel_ratios=(6, 2, 2), # สัดส่วนความสูง
+        title=f"\n{SYMBOL} Professional Chart (WinRate: {winrate:.1f}%)",
+        figsize=(14, 10),       # ขยายขนาดรูป
+        scale_padding={'top': 1.5, 'bottom': 1.0, 'left': 0.8, 'right': 1.5}, # ดันกราฟลงมา
+        tight_layout=True,
+        savefig=chart_path
+    )
 
     last = df.iloc[-1]
     trend_st = "BULLISH 🟢" if last['close'] > last['ema_200'] else "BEARISH 🔴"
     
-    # คำนวณ Action ปัจจุบัน
-    action = "WAIT ⏸"
-    entry = tp = sl = "-"
+    action = "WAIT ⏸"; entry = tp = sl = "-"
     if last['close'] > last['ema_200'] and last['macd'] > last['signal_line']:
         action = "BUY ZONE 🟢"
         entry = f"{last['close']:,.2f}"
