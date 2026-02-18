@@ -1,6 +1,7 @@
 from tvDatafeed import TvDatafeed, Interval
 import pandas as pd
 import matplotlib.pyplot as plt
+import mplfinance as mpf
 import os
 import requests 
 from datetime import datetime
@@ -369,32 +370,53 @@ def run_strategy(SYMBOL, EXCHANGE):
     avg_loss = abs(sum(losses) / len(losses)) if losses else 0
     rrr = avg_win / avg_loss if avg_loss != 0 else 0
     
-    # PLOT
-    df_plot = df.iloc[-300:]
-    plt.figure(figsize=(12, 8))
-    
-    # Subplot 1: Price
-    plt.subplot(2, 1, 1)
-    plt.plot(df_plot.index, df_plot["close"], label="Price", color="black", alpha=0.6)
-    plt.plot(df_plot.index, df_plot["ema_200"], label="EMA 200", color="purple", linewidth=2)
-    plt.plot(df_plot.index, df_plot["ema_fast"], label="EMA 9", color="blue", alpha=0.5)
-    plt.scatter(df_plot[df_plot["signal"]==1].index, df_plot[df_plot["signal"]==1]["signal_price"], marker="^", color="green", s=120, label="Buy")
-    plt.scatter(df_plot[df_plot["signal"]==-1].index, df_plot[df_plot["signal"]==-1]["signal_price"], marker="v", color="red", s=120, label="Sell")
-    plt.title(f"{SYMBOL} Advanced Strategy (WinRate: {winrate:.1f}%)"); plt.legend(); plt.grid(True, alpha=0.2)
+    # =========================================
+    # 🕯️ PLOT CANDLESTICK CHART (ส่วนที่แก้ไข)
+    # =========================================
+    # ตัดข้อมูลมาแสดงผลแค่ 250 แท่งล่าสุด เพื่อความคมชัด
+    df_plot = df.iloc[-250:].copy()
 
-    # Subplot 2: MACD
-    plt.subplot(2, 1, 2)
-    plt.plot(df_plot.index, df_plot["macd"], label="MACD", color="blue")
-    plt.plot(df_plot.index, df_plot["signal_line"], label="Signal", color="orange")
-    plt.bar(df_plot.index, df_plot["hist"], color=['green' if h > 0 else 'red' for h in df_plot["hist"]], alpha=0.3)
-    plt.legend(); plt.grid(True, alpha=0.2)
-    
+    # เตรียมข้อมูลจุดซื้อขาย (ต้องให้ช่องที่ไม่มีสัญญาณเป็น NaN ไม่งั้นมันจะพลอตจุดมั่ว)
+    buy_signals = df_plot['signal_price'].where(df_plot['signal'] == 1, np.nan)
+    sell_signals = df_plot['signal_price'].where(df_plot['signal'] == -1, np.nan)
+
+    # สร้างการตั้งค่าเส้นเพิ่มเติม (AddPlots)
+    apds = [
+        # Panel 0: Main Chart (EMA + Signals)
+        mpf.make_addplot(df_plot['ema_200'], color='purple', width=1.5, panel=0), # เส้นเทรนด์หลัก
+        mpf.make_addplot(df_plot['ema_fast'], color='cyan', width=0.8, panel=0),  # เส้นเร็ว
+        mpf.make_addplot(buy_signals, type='scatter', markersize=100, marker='^', color='lime', panel=0),
+        mpf.make_addplot(sell_signals, type='scatter', markersize=100, marker='v', color='red', panel=0),
+        
+        # Panel 1: MACD
+        mpf.make_addplot(df_plot['hist'], type='bar', width=0.7, panel=1, color=['green' if x >= 0 else 'red' for x in df_plot['hist']], alpha=0.6, ylabel='MACD'),
+        mpf.make_addplot(df_plot['macd'], color='blue', width=1, panel=1),
+        mpf.make_addplot(df_plot['signal_line'], color='orange', width=1, panel=1),
+    ]
+
+    # สร้าง Custom Style ให้ดู Modern
+    mc = mpf.make_marketcolors(up='green', down='red', edge='inherit', wick='inherit', volume='in')
+    s  = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', y_on_right=True, facecolor='white')
+
+    # เตรียม Path ไฟล์
     BASE_DIR = "/tmp"
     chart_dir = os.path.join(BASE_DIR, "charts")
     os.makedirs(chart_dir, exist_ok=True)
-    chart_path = os.path.join(chart_dir, f"{SYMBOL}_adv_strategy.png")
-    plt.savefig(chart_path)
-    plt.close('all')
+    chart_path = os.path.join(chart_dir, f"{SYMBOL}_adv_candle.png")
+
+    # 🔥 สั่ง Plot กราฟแท่งเทียน!
+    mpf.plot(
+        df_plot,
+        type='candle',          # ✅ หัวใจสำคัญ: สั่งให้เป็นแท่งเทียน
+        style=s,                # ใช้สไตล์ที่เรากำหนด
+        addplot=apds,           # เพิ่มเส้นอินดิเคเตอร์
+        volume=True,            # ✅ เพิ่มช่อง Volume ด้านล่างสุด
+        panel_ratios=(6, 2, 2), # อัตราส่วนความสูง: กราฟหลัก(6) : MACD(2) : Volume(2)
+        title=f"\n{SYMBOL} Professional Analysis (WinRate: {winrate:.1f}%)",
+        figsize=(12, 8),        # ขนาดภาพ
+        tight_layout=True,
+        savefig=chart_path      # บันทึกไฟล์โดยตรง
+    )
 
     last = df.iloc[-1]
     trend_st = "BULLISH 🟢" if last['close'] > last['ema_200'] else "BEARISH 🔴"
