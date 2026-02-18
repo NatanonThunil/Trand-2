@@ -279,39 +279,30 @@ def run_strategy(SYMBOL, EXCHANGE):
     df["datetime"] = pd.to_datetime(df["datetime"])
     df.set_index("datetime", inplace=True)
 
-    # ✅ ใช้การคำนวณแบบแม่นยำ (Trend + MACD + ATR)
     df = calculate_indicators(df)
 
     capital = INITIAL_CAPITAL; position = 0; trades = 0; trade_pnls = []
-    df["signal"] = 0; df["signal_price"] = np.nan # ใช้ np.nan เพื่อความชัวร์ในการพลอต
+    df["signal"] = 0; df["signal_price"] = np.nan
     
-    for i in range(200, len(df) - 1): # เริ่มที่ 200 เพื่อรอ EMA 200
+    for i in range(200, len(df) - 1):
         curr = df.iloc[i]; prev = df.iloc[i-1]
         
-        # 🟢 BUY CONDITION: ราคา > EMA200 และ MACD ตัดขึ้น
-        buy_condition = (curr['close'] > curr['ema_200']) and \
-                        (prev['macd'] < prev['signal_line']) and (curr['macd'] > curr['signal_line']) and \
-                        (curr['rsi'] < 70)
+        buy_condition = (curr['close'] > curr['ema_200']) and (prev['macd'] < prev['signal_line']) and (curr['macd'] > curr['signal_line']) and (curr['rsi'] < 70)
+        sell_condition = (curr['close'] < curr['ema_200']) and (prev['macd'] > prev['signal_line']) and (curr['macd'] < curr['signal_line']) and (curr['rsi'] > 30)
 
-        # 🔴 SELL CONDITION: ราคา < EMA200 และ MACD ตัดลง
-        sell_condition = (curr['close'] < curr['ema_200']) and \
-                         (prev['macd'] > prev['signal_line']) and (curr['macd'] < curr['signal_line']) and \
-                         (curr['rsi'] > 30)
-
-        # EXECUTE
         if position == 0 and buy_condition:
             entry_price = df.iloc[i+1]["open"]
             position = capital / entry_price; capital = 0; trades += 1
             df.iloc[i, df.columns.get_loc("signal")] = 1
-            df.iloc[i, df.columns.get_loc("signal_price")] = df.iloc[i]["low"] * 0.995 # วางจุดต่ำกว่าแท่งเทียน
+            df.iloc[i, df.columns.get_loc("signal_price")] = df.iloc[i]["low"] * 0.995
             
-        elif position > 0 and (curr['macd'] < curr['signal_line']): # EXIT (Profit/Loss)
+        elif position > 0 and (curr['macd'] < curr['signal_line']):
             exit_price = df.iloc[i+1]["open"]
             pnl = (exit_price - entry_price) / entry_price * 100
             trade_pnls.append(pnl)
             capital = position * exit_price; position = 0
             df.iloc[i, df.columns.get_loc("signal")] = -1
-            df.iloc[i, df.columns.get_loc("signal_price")] = df.iloc[i]["high"] * 1.005 # วางจุดสูงกว่าแท่งเทียน
+            df.iloc[i, df.columns.get_loc("signal_price")] = df.iloc[i]["high"] * 1.005
     
     final_value = capital + position * df.iloc[-1]["close"]
     profit = final_value - INITIAL_CAPITAL
@@ -325,39 +316,41 @@ def run_strategy(SYMBOL, EXCHANGE):
     rrr = avg_win / avg_loss if avg_loss != 0 else 0
     
     # =========================================
-    # 🕯️ PLOT CANDLESTICK CHART (ส่วนที่แก้ไข)
+    # 🕯️ PLOT CANDLESTICK CHART (FIXED)
     # =========================================
-    # ตัดข้อมูลมาแสดงผลแค่ 250 แท่งล่าสุด เพื่อความคมชัด
-    df_plot = df.iloc[-250:].copy()
+    df_plot = df.iloc[-200:].copy()
 
     buy_signals = df_plot['signal_price'].where(df_plot['signal'] == 1, np.nan)
     sell_signals = df_plot['signal_price'].where(df_plot['signal'] == -1, np.nan)
 
+    # 1. เริ่มต้นด้วยเส้นพื้นฐาน
     apds = [
-        # Panel 0: Main (Price + EMA)
         mpf.make_addplot(df_plot['ema_200'], color='purple', width=1.5, panel=0),
         mpf.make_addplot(df_plot['ema_fast'], color='cyan', width=0.8, panel=0),
-        mpf.make_addplot(buy_signals, type='scatter', markersize=100, marker='^', color='lime', panel=0),
-        mpf.make_addplot(sell_signals, type='scatter', markersize=100, marker='v', color='red', panel=0),
-        
-        # Panel 1: MACD
+    ]
+
+    # 2. เช็คว่ามีสัญญาณ BUY ไหม (กัน Error Zero-size array)
+    if not buy_signals.isna().all():
+        apds.append(mpf.make_addplot(buy_signals, type='scatter', markersize=100, marker='^', color='lime', panel=0))
+
+    # 3. เช็คว่ามีสัญญาณ SELL ไหม
+    if not sell_signals.isna().all():
+        apds.append(mpf.make_addplot(sell_signals, type='scatter', markersize=100, marker='v', color='red', panel=0))
+
+    # 4. เพิ่ม MACD
+    apds.extend([
         mpf.make_addplot(df_plot['hist'], type='bar', width=0.7, panel=1, color=['green' if x >= 0 else 'red' for x in df_plot['hist']], alpha=0.6, ylabel='MACD'),
         mpf.make_addplot(df_plot['macd'], color='blue', width=1, panel=1),
         mpf.make_addplot(df_plot['signal_line'], color='orange', width=1, panel=1),
-    ]
+    ])
 
-    # Create Custom Style (Large Font + Clean Look)
     mc = mpf.make_marketcolors(up='green', down='red', edge='inherit', wick='inherit', volume='in')
     s  = mpf.make_mpf_style(
         marketcolors=mc, 
         gridstyle=':', 
         y_on_right=True, 
         facecolor='white',
-        rc={
-            'font.size': 12,
-            'axes.titlesize': 14,
-            'axes.labelsize': 10
-        }
+        rc={'font.size': 12, 'axes.titlesize': 14, 'axes.labelsize': 10}
     )
 
     BASE_DIR = "/tmp"
@@ -365,18 +358,17 @@ def run_strategy(SYMBOL, EXCHANGE):
     os.makedirs(chart_dir, exist_ok=True)
     chart_path = os.path.join(chart_dir, f"{SYMBOL}_adv_candle.png")
 
-    # ✅ Layout Fix: Add Padding & Resize
     mpf.plot(
         df_plot,
         type='candle',
         style=s,
         addplot=apds,
         volume=True,
-        volume_panel=2,         # ย้าย Volume ไปล่างสุด (Index 2)
-        panel_ratios=(6, 2, 2), # สัดส่วนความสูง
+        volume_panel=2,
+        panel_ratios=(6, 2, 2),
         title=f"\n{SYMBOL} Professional Chart (WinRate: {winrate:.1f}%)",
-        figsize=(14, 10),       # ขยายขนาดรูป
-        scale_padding={'top': 1.5, 'bottom': 1.0, 'left': 0.8, 'right': 1.5}, # ดันกราฟลงมา
+        figsize=(14, 10),
+        scale_padding={'top': 1.5, 'bottom': 1.0, 'left': 0.8, 'right': 1.5},
         tight_layout=True,
         savefig=chart_path
     )
