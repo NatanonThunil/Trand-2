@@ -222,7 +222,7 @@ def format_top_text(title, cache_data, decimals=2, is_sell=False):
     for i, s in enumerate(cache_data["results"][:5], 1):
         price_fmt = f"{s['price']:,.{decimals}f}"
         text += f"🔥 *{i}. {s['symbol']}*\n💰 {price_fmt}\n💡 {' + '.join(s['reasons'])}\n\n"
-    if cache_data['updated_at']: text += f"🕒 Last Update: {cache_data['updated_at'].strftime('%H:%M')}"
+    if cache_data['updated_at']: text += f"🕒 Updated: {cache_data['updated_at'].strftime('%H:%M')}"
     return text
 
 def get_top_th_text(): return format_top_text("หุ้นไทย (TH)", TOP_CACHE_TH)
@@ -237,27 +237,73 @@ def get_top_hk_sell_text(): return format_top_text("หุ้นฮ่องก�
 def get_top_us_stock_sell_text(): return format_top_text("หุ้นอเมริกา SELL", TOP_SELL_CACHE_US_STOCK, is_sell=True)
 def get_top_crypto_sell_text(): return format_top_text("CRYPTO SELL", TOP_SELL_CACHE_CRYPTO, decimals=4, is_sell=True)
 
+# ✅ ฟังก์ชันใหม่: แสดงแยกรายประเทศ (Top 3 ของแต่ละที่)
 def get_global_top_text():
-    all_results = []
-    for market in GLOBAL_DATA_STORE: all_results.extend(GLOBAL_DATA_STORE[market])
-    if not all_results: return "⏳ ข้อมูล Global ยังไม่พร้อม..."
-    sorted_res = sorted(all_results, key=lambda x: x["score"], reverse=True)[:15]
-    text = "🌍 *TOP 15 GLOBAL BUY* (Strong Trend)\n\n"
-    for i, s in enumerate(sorted_res, 1):
-        flag = s['region'].split(' ')[0]
-        text += f"{flag} *{i}. {s['symbol']}* ({s['region']})\n💰 {s['price']:,.2f}\n\n"
-    if GLOBAL_LAST_UPDATE["time"]: text += f"🕒 Last Job: {GLOBAL_LAST_UPDATE['time'].strftime('%H:%M')}"
+    # เช็คก่อนว่ามีข้อมูลไหม
+    if not any(GLOBAL_DATA_STORE.values()): 
+        return "⏳ ข้อมูล Global ยังไม่พร้อม (รอรอบสแกน)..."
+    
+    text = "🌍 *GLOBAL MARKET OPPORTUNITIES (Buy)* 🚀\n"
+    text += "_(คัด Top 3 เน้นๆ จากทุกตลาด)_\n\n"
+    
+    # กำหนดลำดับการแสดงผล
+    markets = [
+        ("CRYPTO", "💎 Crypto"),
+        ("US", "🇺🇸 US Market"),
+        ("TH", "🇹🇭 Thai Market"),
+        ("HK", "🇭🇰 HK Market"),
+        ("CN", "🇨🇳 China Market")
+    ]
+    
+    for key, title in markets:
+        data = GLOBAL_DATA_STORE.get(key, [])
+        if not data: continue
+        
+        # คัดมาแค่ 3 ตัวท็อปสุดของตลาดนั้น
+        top_picks = sorted(data, key=lambda x: x["score"], reverse=True)[:3]
+        
+        if top_picks:
+            text += f"*{title}*\n"
+            for s in top_picks:
+                price = f"{s['price']:,.2f}"
+                # ย่อเหตุผลให้สั้นลงเพื่อความสวยงาม
+                reason = s['reasons'][0] if s['reasons'] else "Strong Trend"
+                text += f" • `{s['symbol']}` ({price}) ➜ {reason}\n"
+            text += "\n"
+
+    if GLOBAL_LAST_UPDATE["time"]:
+        text += f"🕒 Data Updated: {GLOBAL_LAST_UPDATE['time'].strftime('%H:%M')}"
     return text
 
 def get_global_sell_text():
-    all_results = []
-    for market in GLOBAL_DATA_SELL_STORE: all_results.extend(GLOBAL_DATA_SELL_STORE[market])
-    if not all_results: return "⏳ ข้อมูล Global Sell ยังไม่พร้อม..."
-    sorted_res = sorted(all_results, key=lambda x: x["score"], reverse=True)[:15]
-    text = "📉 *TOP 15 GLOBAL SELL* (Strong Trend)\n\n"
-    for i, s in enumerate(sorted_res, 1):
-        flag = s['region'].split(' ')[0]
-        text += f"{flag} *{i}. {s['symbol']}* ({s['region']})\n💰 {s['price']:,.2f}\n\n"
+    if not any(GLOBAL_DATA_SELL_STORE.values()): 
+        return "⏳ ข้อมูล Global Sell ยังไม่พร้อม..."
+    
+    text = "📉 *GLOBAL MARKET WARNINGS (Sell)* 🔻\n"
+    text += "_(ระวัง! หุ้นเหล่านี้กำลังเป็นขาลงหนัก)_\n\n"
+    
+    markets = [
+        ("CRYPTO", "💎 Crypto"),
+        ("US", "🇺🇸 US Market"),
+        ("TH", "🇹🇭 Thai Market"),
+        ("HK", "🇭🇰 HK Market"),
+        ("CN", "🇨🇳 China Market")
+    ]
+    
+    for key, title in markets:
+        data = GLOBAL_DATA_SELL_STORE.get(key, [])
+        if not data: continue
+        
+        top_picks = sorted(data, key=lambda x: x["score"], reverse=True)[:3]
+        
+        if top_picks:
+            text += f"*{title}*\n"
+            for s in top_picks:
+                price = f"{s['price']:,.2f}"
+                reason = s['reasons'][0] if s['reasons'] else "Downtrend"
+                text += f" • `{s['symbol']}` ({price}) ➜ {reason}\n"
+            text += "\n"
+            
     return text
 
 # =====================
