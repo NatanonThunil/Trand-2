@@ -16,6 +16,11 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+
+# ✅ เพิ่มตรงนี้: สั่งปิดปาก httpx และ apscheduler ไม่ให้บ่นพร่ำเพรื่อ
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("apscheduler").setLevel(logging.WARNING) 
+
 logger = logging.getLogger(__name__)
 
 load_dotenv()
