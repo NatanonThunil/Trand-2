@@ -1,13 +1,12 @@
 from tvDatafeed import TvDatafeed, Interval
 import pandas as pd
-import matplotlib.pyplot as plt
-import mplfinance as mpf
+import mplfinance as mpf # ✅ ต้องมีไลบรารีนี้
 import os
 import requests 
 from datetime import datetime
 import time
 import matplotlib
-import numpy as np
+import numpy as np # ✅ ต้องมี numpy
 matplotlib.use('Agg')
 
 # =====================
@@ -67,30 +66,26 @@ def get_top_usdt_symbols_by_volume(limit=100):
     except: return []
 
 # =====================
-# 🧠 CORE ANALYSIS (อัปเกรดให้แม่นยำ)
+# 🧠 CORE ANALYSIS
 # =====================
 def calculate_indicators(df):
     """คำนวณอินดิเคเตอร์ทั้งหมดในทีเดียว"""
-    # EMA
     df['ema_fast'] = df['close'].ewm(span=9, adjust=False).mean()
     df['ema_slow'] = df['close'].ewm(span=21, adjust=False).mean()
     df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean() # Trend Filter
     
-    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    # MACD
     exp12 = df['close'].ewm(span=12, adjust=False).mean()
     exp26 = df['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = exp12 - exp26
     df['signal_line'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['hist'] = df['macd'] - df['signal_line']
     
-    # ATR
     high_low = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
     low_close = (df['low'] - df['close'].shift()).abs()
@@ -108,7 +103,6 @@ def analyze_chart(df, mode="BUY"):
     
     score = 0; reasons = []
     
-    # Logic แม่นยำ: ใช้ EMA 200 + MACD + RSI
     is_uptrend = last['close'] > last['ema_200']
     is_downtrend = last['close'] < last['ema_200']
     macd_bullish = last['macd'] > last['signal_line']
@@ -116,18 +110,14 @@ def analyze_chart(df, mode="BUY"):
     
     if mode == "BUY":
         if is_uptrend: score += 2; reasons.append("Above EMA200 (Major Uptrend)")
-        else: score -= 5 # ห้ามสวนเทรนด์ใหญ่
-        
+        else: score -= 5 
         if macd_bullish: score += 2; reasons.append("MACD Bullish")
-        
         if 50 < last['rsi'] < 70: score += 1; reasons.append(f"RSI Healthy ({last['rsi']:.0f})")
         
     else: # SELL
         if is_downtrend: score += 2; reasons.append("Below EMA200 (Major Downtrend)")
         else: score -= 5 
-        
         if macd_bearish: score += 2; reasons.append("MACD Bearish")
-        
         if 30 < last['rsi'] < 50: score += 1; reasons.append(f"RSI Weak ({last['rsi']:.0f})")
 
     return score, reasons, last['close']
@@ -140,7 +130,6 @@ def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", lim
     tv = TvDatafeed()
     results = []
     total = len(targets)
-    print(f"Scanning {region_name} {mode} ({total})...")
     
     for i, (symbol, exchange) in enumerate(targets):
         if callback: callback(i, total)
@@ -148,14 +137,13 @@ def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", lim
             if exchange == "SZSE": exchange = "SZSE"
             df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_hour, n_bars=250)
             score, reasons, price = analyze_chart(df, mode=mode)
-            if score >= 4: # คะแนนต้องถึงเกณฑ์ (ผ่าน Trend + MACD)
+            if score >= 4: 
                 results.append({ "symbol": symbol, "exchange": exchange, "price": price, "score": score, "reasons": reasons, "region": region_name })
             time.sleep(0.01)
         except: continue
 
     cache_dict["updated_at"] = datetime.now()
     cache_dict["results"] = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
-    print(f"✅ {region_name} Done.")
     return results
 
 def _scan_crypto(cache_dict, mode="BUY", limit=100, callback=None):
@@ -163,7 +151,6 @@ def _scan_crypto(cache_dict, mode="BUY", limit=100, callback=None):
     tv = TvDatafeed()
     results = []
     total = len(SYMBOLS)
-    print(f"Scanning Crypto {mode} ({total})...")
     
     for i, symbol in enumerate(SYMBOLS):
         if callback: callback(i, total)
@@ -238,65 +225,34 @@ def get_top_hk_sell_text(): return format_top_text("หุ้นฮ่องก�
 def get_top_us_stock_sell_text(): return format_top_text("หุ้นอเมริกา SELL", TOP_SELL_CACHE_US_STOCK, is_sell=True)
 def get_top_crypto_sell_text(): return format_top_text("CRYPTO SELL", TOP_SELL_CACHE_CRYPTO, decimals=4, is_sell=True)
 
-# ✅ ฟังก์ชันใหม่: แสดงแยกรายประเทศ (Top 3 ของแต่ละที่)
 def get_global_top_text():
-    # เช็คก่อนว่ามีข้อมูลไหม
     if not any(GLOBAL_DATA_STORE.values()): 
         return "⏳ ข้อมูล Global ยังไม่พร้อม (รอรอบสแกน)..."
-    
-    text = "🌍 *GLOBAL MARKET OPPORTUNITIES (Buy)* 🚀\n"
-    text += "_(คัด Top 3 เน้นๆ จากทุกตลาด)_\n\n"
-    
-    # กำหนดลำดับการแสดงผล
-    markets = [
-        ("CRYPTO", "💎 Crypto"),
-        ("US", "🇺🇸 US Market"),
-        ("TH", "🇹🇭 Thai Market"),
-        ("HK", "🇭🇰 HK Market"),
-        ("CN", "🇨🇳 China Market")
-    ]
-    
+    text = "🌍 *GLOBAL MARKET OPPORTUNITIES (Buy)* 🚀\n_(คัด Top 3 เน้นๆ จากทุกตลาด)_\n\n"
+    markets = [("CRYPTO", "💎 Crypto"), ("US", "🇺🇸 US Market"), ("TH", "🇹🇭 Thai Market"), ("HK", "🇭🇰 HK Market"), ("CN", "🇨🇳 China Market")]
     for key, title in markets:
         data = GLOBAL_DATA_STORE.get(key, [])
         if not data: continue
-        
-        # คัดมาแค่ 3 ตัวท็อปสุดของตลาดนั้น
         top_picks = sorted(data, key=lambda x: x["score"], reverse=True)[:3]
-        
         if top_picks:
             text += f"*{title}*\n"
             for s in top_picks:
                 price = f"{s['price']:,.2f}"
-                # ย่อเหตุผลให้สั้นลงเพื่อความสวยงาม
                 reason = s['reasons'][0] if s['reasons'] else "Strong Trend"
                 text += f" • `{s['symbol']}` ({price}) ➜ {reason}\n"
             text += "\n"
-
-    if GLOBAL_LAST_UPDATE["time"]:
-        text += f"🕒 Data Updated: {GLOBAL_LAST_UPDATE['time'].strftime('%H:%M')}"
+    if GLOBAL_LAST_UPDATE["time"]: text += f"🕒 Data Updated: {GLOBAL_LAST_UPDATE['time'].strftime('%H:%M')}"
     return text
 
 def get_global_sell_text():
     if not any(GLOBAL_DATA_SELL_STORE.values()): 
         return "⏳ ข้อมูล Global Sell ยังไม่พร้อม..."
-    
-    text = "📉 *GLOBAL MARKET WARNINGS (Sell)* 🔻\n"
-    text += "_(ระวัง! หุ้นเหล่านี้กำลังเป็นขาลงหนัก)_\n\n"
-    
-    markets = [
-        ("CRYPTO", "💎 Crypto"),
-        ("US", "🇺🇸 US Market"),
-        ("TH", "🇹🇭 Thai Market"),
-        ("HK", "🇭🇰 HK Market"),
-        ("CN", "🇨🇳 China Market")
-    ]
-    
+    text = "📉 *GLOBAL MARKET WARNINGS (Sell)* 🔻\n_(ระวัง! หุ้นเหล่านี้กำลังเป็นขาลงหนัก)_\n\n"
+    markets = [("CRYPTO", "💎 Crypto"), ("US", "🇺🇸 US Market"), ("TH", "🇹🇭 Thai Market"), ("HK", "🇭🇰 HK Market"), ("CN", "🇨🇳 China Market")]
     for key, title in markets:
         data = GLOBAL_DATA_SELL_STORE.get(key, [])
         if not data: continue
-        
         top_picks = sorted(data, key=lambda x: x["score"], reverse=True)[:3]
-        
         if top_picks:
             text += f"*{title}*\n"
             for s in top_picks:
@@ -304,11 +260,10 @@ def get_global_sell_text():
                 reason = s['reasons'][0] if s['reasons'] else "Downtrend"
                 text += f" • `{s['symbol']}` ({price}) ➜ {reason}\n"
             text += "\n"
-            
     return text
 
 # =====================
-# 📈 BACKTEST STRATEGY (High Accuracy)
+# 📈 BACKTEST STRATEGY (High Accuracy + Pro Chart)
 # =====================
 def run_strategy(SYMBOL, EXCHANGE):
     TIMEFRAME = Interval.in_1_hour
@@ -328,11 +283,10 @@ def run_strategy(SYMBOL, EXCHANGE):
     df = calculate_indicators(df)
 
     capital = INITIAL_CAPITAL; position = 0; trades = 0; trade_pnls = []
-    df["signal"] = 0; df["signal_price"] = None
+    df["signal"] = 0; df["signal_price"] = np.nan # ใช้ np.nan เพื่อความชัวร์ในการพลอต
     
     for i in range(200, len(df) - 1): # เริ่มที่ 200 เพื่อรอ EMA 200
-        curr = df.iloc[i]
-        prev = df.iloc[i-1]
+        curr = df.iloc[i]; prev = df.iloc[i-1]
         
         # 🟢 BUY CONDITION: ราคา > EMA200 และ MACD ตัดขึ้น
         buy_condition = (curr['close'] > curr['ema_200']) and \
@@ -349,7 +303,7 @@ def run_strategy(SYMBOL, EXCHANGE):
             entry_price = df.iloc[i+1]["open"]
             position = capital / entry_price; capital = 0; trades += 1
             df.iloc[i, df.columns.get_loc("signal")] = 1
-            df.iloc[i, df.columns.get_loc("signal_price")] = df.iloc[i]["low"]
+            df.iloc[i, df.columns.get_loc("signal_price")] = df.iloc[i]["low"] * 0.995 # วางจุดต่ำกว่าแท่งเทียน
             
         elif position > 0 and (curr['macd'] < curr['signal_line']): # EXIT (Profit/Loss)
             exit_price = df.iloc[i+1]["open"]
@@ -357,7 +311,7 @@ def run_strategy(SYMBOL, EXCHANGE):
             trade_pnls.append(pnl)
             capital = position * exit_price; position = 0
             df.iloc[i, df.columns.get_loc("signal")] = -1
-            df.iloc[i, df.columns.get_loc("signal_price")] = df.iloc[i]["high"]
+            df.iloc[i, df.columns.get_loc("signal_price")] = df.iloc[i]["high"] * 1.005 # วางจุดสูงกว่าแท่งเทียน
     
     final_value = capital + position * df.iloc[-1]["close"]
     profit = final_value - INITIAL_CAPITAL
