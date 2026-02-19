@@ -3,6 +3,7 @@ import logging
 import os
 import threading
 import time
+import requests
 from datetime import time as dt_time, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import socket
@@ -145,6 +146,22 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"🔥 Update {update} caused error: {context.error}")
 
 # ======================
+# 🔔 KEEP-ALIVE PING (สำหรับ Render ที่ต้องมีการ Ping ตัวเอง
+# ======================
+
+def keep_alive_ping():
+    port = os.environ.get("PORT", 8080)
+    # URL ของตัวเอง (ถ้าอยู่บน Local ให้ใช้ localhost, ถ้า Render มันจะยิงเข้า IP ตัวเอง)
+    url = f"http://127.0.0.1:{port}" 
+    
+    while True:
+        time.sleep(600) # รอ 10 นาที (600 วินาที)
+        try:
+            requests.get(url)
+            # logger.info("💓 Self-Ping success (Keep-Alive)") # เปิดคอมเม้นต์ถ้าอยากดู Log
+        except Exception as e:
+            logger.warning(f"⚠️ Self-Ping failed: {e}")
+# ======================
 # 🎮 COMMANDS
 # ======================
 async def start(u, c): await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
@@ -221,6 +238,9 @@ async def job_check_alerts(ctx):
 # ======================
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
+
+    threading.Thread(target=keep_alive_ping, daemon=True).start()
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -250,14 +270,13 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    while True: # วนลูปไม่รู้จบ
+    while True: # วนลูปกันตาย (Auto Restart)
         try:
-            main() # รันบอท
+            main()
         except Exception as e:
-            print(f"🔥 CRITICAL ERROR: {e}")
-            print("🔄 Restarting bot in 10 seconds...")
-            import time
-            time.sleep(10) # รอ 10 วิแล้วเริ่มใหม่
+            logger.critical(f"🔥 CRITICAL ERROR: {e}")
+            logger.info("🔄 Restarting bot in 10 seconds...")
+            time.sleep(10)
         except KeyboardInterrupt:
             print("🛑 Bot stopped by user")
             break
