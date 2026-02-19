@@ -1,12 +1,12 @@
 from tvDatafeed import TvDatafeed, Interval
 import pandas as pd
-import mplfinance as mpf # ✅ ต้องมีไลบรารีนี้
+import mplfinance as mpf
 import os
 import requests 
 from datetime import datetime
 import time
 import matplotlib
-import numpy as np # ✅ ต้องมี numpy
+import numpy as np
 matplotlib.use('Agg')
 
 # =====================
@@ -66,14 +66,17 @@ def get_top_usdt_symbols_by_volume(limit=100):
     except: return []
 
 # =====================
-# 🧠 CORE ANALYSIS
+# 🧠 CORE ANALYSIS (PRO TRADER EDITION 🎯)
 # =====================
 def calculate_indicators(df):
-    """คำนวณอินดิเคเตอร์ทั้งหมดในทีเดียว"""
+    """คำนวณอินดิเคเตอร์แบบ Multi-Dimensional (Trend, Momentum, Volatility, Volume)"""
+    # 1. Trend Indicators
     df['ema_fast'] = df['close'].ewm(span=9, adjust=False).mean()
     df['ema_slow'] = df['close'].ewm(span=21, adjust=False).mean()
-    df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean() # Trend Filter
+    df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()   # เทรนด์ระยะกลาง
+    df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean() # เทรนด์ระยะยาว
     
+    # 2. Momentum Indicators (RSI & MACD)
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -86,12 +89,23 @@ def calculate_indicators(df):
     df['signal_line'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['hist'] = df['macd'] - df['signal_line']
     
+    # 3. Volatility & Support/Resistance (Bollinger Bands & ATR)
+    df['bb_mid'] = df['close'].rolling(window=20).mean()
+    df['bb_std'] = df['close'].rolling(window=20).std()
+    df['bb_upper'] = df['bb_mid'] + (2 * df['bb_std'])
+    df['bb_lower'] = df['bb_mid'] - (2 * df['bb_std'])
+    
     high_low = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
     low_close = (df['low'] - df['close'].shift()).abs()
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    df['atr'] = true_range.rolling(14).mean()
+    df['atr'] = ranges.max(axis=1).rolling(14).mean()
+
+    # 4. Volume Analysis
+    if 'volume' in df.columns:
+        df['vol_sma'] = df['volume'].rolling(window=20).mean()
+    else:
+        df['vol_sma'] = 0 
     
     return df
 
@@ -99,28 +113,81 @@ def analyze_chart(df, mode="BUY"):
     if df is None or len(df) < 200: return 0, [], 0
     
     df = calculate_indicators(df)
-    last = df.iloc[-1]
     
-    score = 0; reasons = []
+    curr = df.iloc[-1]
+    prev = df.iloc[-2]
     
-    is_uptrend = last['close'] > last['ema_200']
-    is_downtrend = last['close'] < last['ema_200']
-    macd_bullish = last['macd'] > last['signal_line']
-    macd_bearish = last['macd'] < last['signal_line']
+    score = 0
+    reasons = []
     
     if mode == "BUY":
-        if is_uptrend: score += 2; reasons.append("Above EMA200 (Major Uptrend)")
-        else: score -= 5 
-        if macd_bullish: score += 2; reasons.append("MACD Bullish")
-        if 50 < last['rsi'] < 70: score += 1; reasons.append(f"RSI Healthy ({last['rsi']:.0f})")
-        
-    else: # SELL
-        if is_downtrend: score += 2; reasons.append("Below EMA200 (Major Downtrend)")
-        else: score -= 5 
-        if macd_bearish: score += 2; reasons.append("MACD Bearish")
-        if 30 < last['rsi'] < 50: score += 1; reasons.append(f"RSI Weak ({last['rsi']:.0f})")
+        # Rule 1: Trend Alignment
+        is_uptrend = (curr['close'] > curr['ema_200']) and (curr['ema_50'] > curr['ema_200'])
+        if not is_uptrend:
+            score -= 10
+            reasons.append("❌ Counter Trend (สวนเทรนด์หลัก)")
+        else:
+            score += 3
+            reasons.append("✅ Uptrend Confirmed")
 
-    return score, reasons, last['close']
+            # Rule 2: Value Zone
+            if curr['close'] < curr['bb_upper']:
+                score += 1
+                if curr['close'] <= curr['bb_mid'] * 1.02: 
+                    score += 2
+                    reasons.append("💎 Value Zone (ได้ราคาต้นรอบ)")
+            else:
+                score -= 2
+                reasons.append("⚠️ Overextended (ราคาแพงไป)")
+
+            # Rule 3: Momentum & Volume
+            if prev['macd'] < prev['signal_line'] and curr['macd'] > curr['signal_line']:
+                score += 2
+                reasons.append("🚀 MACD Golden Cross")
+            elif curr['macd'] > curr['signal_line'] and curr['hist'] > prev['hist']:
+                score += 1
+
+            if 40 <= curr['rsi'] <= 65:
+                score += 1
+                reasons.append(f"⚖️ RSI Healthy ({curr['rsi']:.0f})")
+            elif curr['rsi'] > 70:
+                score -= 1
+
+            if curr['vol_sma'] > 0 and curr['volume'] > (curr['vol_sma'] * 1.5) and curr['close'] > curr['open']:
+                score += 2
+                reasons.append("📊 Smart Money In")
+
+    else: # SELL
+        is_downtrend = (curr['close'] < curr['ema_200']) and (curr['ema_50'] < curr['ema_200'])
+        if not is_downtrend:
+            score -= 10
+            reasons.append("❌ Counter Trend")
+        else:
+            score += 3
+            reasons.append("✅ Downtrend Confirmed")
+
+            if curr['close'] > curr['bb_lower']:
+                score += 1
+                if curr['close'] >= curr['bb_mid'] * 0.98:
+                    score += 2
+                    reasons.append("🎯 Pullback Short")
+            else:
+                score -= 2
+
+            if prev['macd'] > prev['signal_line'] and curr['macd'] < curr['signal_line']:
+                score += 2
+                reasons.append("🔻 MACD Death Cross")
+            
+            if 35 <= curr['rsi'] <= 60:
+                score += 1
+            elif curr['rsi'] < 30:
+                score -= 1
+                
+            if curr['vol_sma'] > 0 and curr['volume'] > (curr['vol_sma'] * 1.5) and curr['close'] < curr['open']:
+                score += 2
+                reasons.append("🩸 Panic Sell")
+
+    return score, reasons, curr['close']
 
 # =====================
 # 🚀 SCANNER ENGINE
@@ -137,7 +204,7 @@ def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", lim
             if exchange == "SZSE": exchange = "SZSE"
             df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_hour, n_bars=250)
             score, reasons, price = analyze_chart(df, mode=mode)
-            if score >= 4: 
+            if score >= 6: # ปรับเกณฑ์ขึ้นเพราะเงื่อนไขเยอะขึ้น
                 results.append({ "symbol": symbol, "exchange": exchange, "price": price, "score": score, "reasons": reasons, "region": region_name })
             time.sleep(0.01)
         except: continue
@@ -157,7 +224,7 @@ def _scan_crypto(cache_dict, mode="BUY", limit=100, callback=None):
         try:
             df = tv.get_hist(symbol=symbol, exchange="BINANCE", interval=Interval.in_1_hour, n_bars=250)
             score, reasons, price = analyze_chart(df, mode=mode)
-            if score >= 4:
+            if score >= 6:
                 results.append({ "symbol": symbol, "exchange": "BINANCE", "price": price, "score": score, "reasons": reasons, "region": "CRYPTO" })
             time.sleep(0.01)
         except: continue
@@ -263,7 +330,7 @@ def get_global_sell_text():
     return text
 
 # =====================
-# 📈 BACKTEST STRATEGY (High Accuracy + Pro Chart)
+# 📈 BACKTEST STRATEGY (PRO TRADER & PRO CHART)
 # =====================
 def run_strategy(SYMBOL, EXCHANGE):
     TIMEFRAME = Interval.in_1_hour
@@ -279,6 +346,7 @@ def run_strategy(SYMBOL, EXCHANGE):
     df["datetime"] = pd.to_datetime(df["datetime"])
     df.set_index("datetime", inplace=True)
 
+    # ✅ ใช้การคำนวณ Pro Trader
     df = calculate_indicators(df)
 
     capital = INITIAL_CAPITAL; position = 0; trades = 0; trade_pnls = []
@@ -287,8 +355,12 @@ def run_strategy(SYMBOL, EXCHANGE):
     for i in range(200, len(df) - 1):
         curr = df.iloc[i]; prev = df.iloc[i-1]
         
-        buy_condition = (curr['close'] > curr['ema_200']) and (prev['macd'] < prev['signal_line']) and (curr['macd'] > curr['signal_line']) and (curr['rsi'] < 70)
-        sell_condition = (curr['close'] < curr['ema_200']) and (prev['macd'] > prev['signal_line']) and (curr['macd'] < curr['signal_line']) and (curr['rsi'] > 30)
+        # 🟢 BUY CONDITION: Pro Logic
+        is_uptrend = (curr['close'] > curr['ema_200']) and (curr['ema_50'] > curr['ema_200'])
+        buy_condition = is_uptrend and (prev['macd'] < prev['signal_line']) and (curr['macd'] > curr['signal_line']) and (curr['rsi'] < 70)
+
+        # 🔴 SELL CONDITION: ออกเมื่อ MACD ตัดลง
+        sell_condition = (prev['macd'] > prev['signal_line']) and (curr['macd'] < curr['signal_line'])
 
         if position == 0 and buy_condition:
             entry_price = df.iloc[i+1]["open"]
@@ -296,7 +368,7 @@ def run_strategy(SYMBOL, EXCHANGE):
             df.iloc[i, df.columns.get_loc("signal")] = 1
             df.iloc[i, df.columns.get_loc("signal_price")] = df.iloc[i]["low"] * 0.995
             
-        elif position > 0 and (curr['macd'] < curr['signal_line']):
+        elif position > 0 and sell_condition:
             exit_price = df.iloc[i+1]["open"]
             pnl = (exit_price - entry_price) / entry_price * 100
             trade_pnls.append(pnl)
@@ -316,28 +388,24 @@ def run_strategy(SYMBOL, EXCHANGE):
     rrr = avg_win / avg_loss if avg_loss != 0 else 0
     
     # =========================================
-    # 🕯️ PLOT CANDLESTICK CHART (FIXED)
+    # 🕯️ PLOT CANDLESTICK CHART (FIXED Zero-size)
     # =========================================
     df_plot = df.iloc[-200:].copy()
 
     buy_signals = df_plot['signal_price'].where(df_plot['signal'] == 1, np.nan)
     sell_signals = df_plot['signal_price'].where(df_plot['signal'] == -1, np.nan)
 
-    # 1. เริ่มต้นด้วยเส้นพื้นฐาน
     apds = [
         mpf.make_addplot(df_plot['ema_200'], color='purple', width=1.5, panel=0),
-        mpf.make_addplot(df_plot['ema_fast'], color='cyan', width=0.8, panel=0),
+        mpf.make_addplot(df_plot['ema_50'], color='cyan', width=1, panel=0),
     ]
 
-    # 2. เช็คว่ามีสัญญาณ BUY ไหม (กัน Error Zero-size array)
+    # ป้องกัน Error ถ้าไม่มีสัญญาณซื้อขายในช่วงนี้
     if not buy_signals.isna().all():
-        apds.append(mpf.make_addplot(buy_signals, type='scatter', markersize=100, marker='^', color='lime', panel=0))
-
-    # 3. เช็คว่ามีสัญญาณ SELL ไหม
+        apds.append(mpf.make_addplot(buy_signals, type='scatter', markersize=120, marker='^', color='lime', panel=0))
     if not sell_signals.isna().all():
-        apds.append(mpf.make_addplot(sell_signals, type='scatter', markersize=100, marker='v', color='red', panel=0))
+        apds.append(mpf.make_addplot(sell_signals, type='scatter', markersize=120, marker='v', color='red', panel=0))
 
-    # 4. เพิ่ม MACD
     apds.extend([
         mpf.make_addplot(df_plot['hist'], type='bar', width=0.7, panel=1, color=['green' if x >= 0 else 'red' for x in df_plot['hist']], alpha=0.6, ylabel='MACD'),
         mpf.make_addplot(df_plot['macd'], color='blue', width=1, panel=1),
@@ -366,7 +434,7 @@ def run_strategy(SYMBOL, EXCHANGE):
         volume=True,
         volume_panel=2,
         panel_ratios=(6, 2, 2),
-        title=f"\n{SYMBOL} Professional Chart (WinRate: {winrate:.1f}%)",
+        title=f"\n{SYMBOL} PRO Analysis (WinRate: {winrate:.1f}%)",
         figsize=(14, 10),
         scale_padding={'top': 1.5, 'bottom': 1.0, 'left': 0.8, 'right': 1.5},
         tight_layout=True,
@@ -374,23 +442,23 @@ def run_strategy(SYMBOL, EXCHANGE):
     )
 
     last = df.iloc[-1]
-    trend_st = "BULLISH 🟢" if last['close'] > last['ema_200'] else "BEARISH 🔴"
+    trend_st = "BULLISH 🟢" if (last['close'] > last['ema_200'] and last['ema_50'] > last['ema_200']) else "BEARISH 🔴"
     
     action = "WAIT ⏸"; entry = tp = sl = "-"
-    if last['close'] > last['ema_200'] and last['macd'] > last['signal_line']:
-        action = "BUY ZONE 🟢"
+    if (last['close'] > last['ema_200'] and last['ema_50'] > last['ema_200']) and last['macd'] > last['signal_line']:
+        action = "BUY ZONE 🟢 (Pro Setup)"
         entry = f"{last['close']:,.2f}"
         sl = f"SL: {last['close'] - (last['atr']*2):,.2f}"
         tp = f"TP: {last['close'] + (last['atr']*3):,.2f}"
-    elif last['close'] < last['ema_200'] and last['macd'] < last['signal_line']:
-        action = "SELL ZONE 🔴"
+    elif (last['close'] < last['ema_200'] and last['ema_50'] < last['ema_200']) and last['macd'] < last['signal_line']:
+        action = "SELL ZONE 🔴 (Pro Setup)"
         entry = f"{last['close']:,.2f}"
         sl = f"SL: {last['close'] + (last['atr']*2):,.2f}"
         tp = f"TP: {last['close'] - (last['atr']*3):,.2f}"
 
     return {
         "text": f"""
-📊 *MARKET SIGNAL*
+📊 *PRO MARKET SIGNAL*
 📌 Symbol : {SYMBOL}
 💰 Price  : {last['close']:,.2f}
 
