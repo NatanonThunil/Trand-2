@@ -12,13 +12,16 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 
-# ตั้งค่า Logging
+# ==========================================
+# ⚙️ CONFIGURATION
+# ==========================================
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", None) 
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# ✅ เพิ่มตรงนี้: สั่งปิดปาก httpx และ apscheduler ไม่ให้บ่นพร่ำเพรื่อ
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING) 
 
@@ -30,7 +33,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     logger.critical("❌ ไม่พบ BOT_TOKEN! ตรวจสอบไฟล์ .env")
     exit(1)
-
 # ==========================================
 # 🧩 IMPORTS
 # ==========================================
@@ -146,21 +148,28 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"🔥 Update {update} caused error: {context.error}")
 
 # ======================
-# 🔔 KEEP-ALIVE PING (สำหรับ Render ที่ต้องมีการ Ping ตัวเอง
+# 🔔 KEEP-ALIVE PING 
 # ======================
-
 def keep_alive_ping():
     port = os.environ.get("PORT", 8080)
-    # URL ของตัวเอง (ถ้าอยู่บน Local ให้ใช้ localhost, ถ้า Render มันจะยิงเข้า IP ตัวเอง)
-    url = f"http://127.0.0.1:{port}" 
+    # ถ้ามี RENDER_EXTERNAL_URL ให้ยิงไปที่นั่น (ดีที่สุด)
+    # ถ้าไม่มี ให้ยิงเข้า localhost ไปก่อน
+    url = RENDER_EXTERNAL_URL if RENDER_EXTERNAL_URL else f"http://127.0.0.1:{port}"
+    
+    time.sleep(10) # รอให้ server เปิดเสร็จก่อนเริ่ม ping
+    logger.info(f"📡 Keep-Alive Ping target set to: {url}")
     
     while True:
-        time.sleep(600) # รอ 10 นาที (600 วินาที)
         try:
-            requests.get(url)
-            # logger.info("💓 Self-Ping success (Keep-Alive)") # เปิดคอมเม้นต์ถ้าอยากดู Log
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                pass # เงียบๆ ไว้ ไม่ต้องรก log
+            else:
+                logger.warning(f"⚠️ Ping returned status code: {res.status_code}")
         except Exception as e:
             logger.warning(f"⚠️ Self-Ping failed: {e}")
+        
+        time.sleep(600) # ยิงทุก 10 นาที
 # ======================
 # 🎮 COMMANDS
 # ======================
@@ -267,7 +276,7 @@ def main():
     jq.run_repeating(job_check_alerts, interval=120, first=10)
 
     logger.info("🤖 Bot Started")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     while True: # วนลูปกันตาย (Auto Restart)
