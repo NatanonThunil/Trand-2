@@ -276,7 +276,8 @@ def format_top_text(title, cache_data, decimals=2, is_sell=False):
     text = f"{icon} *TOP 5 {title}* (1H)\n\n"
     for i, s in enumerate(cache_data["results"][:5], 1):
         price_fmt = f"{s['price']:,.{decimals}f}"
-        text += f"🔥 *{i}. {s['symbol']}*\n💰 {price_fmt}\n💡 {' + '.join(s['reasons'])}\n\n"
+        # ✅ เพิ่มชื่อตลาด (Exchange) ต่อท้ายชื่อหุ้น
+        text += f"🔥 *{i}. {s['symbol']}* `[{s['exchange']}]`\n💰 {price_fmt}\n💡 {' + '.join(s['reasons'])}\n\n"
     if cache_data['updated_at']: text += f"🕒 Updated: {cache_data['updated_at'].strftime('%H:%M')}"
     return text
 
@@ -306,7 +307,7 @@ def get_global_top_text():
             for s in top_picks:
                 price = f"{s['price']:,.2f}"
                 reason = s['reasons'][0] if s['reasons'] else "Strong Trend"
-                text += f" • `{s['symbol']}` ({price}) ➜ {reason}\n"
+                text += f" • `{s['symbol']}` [{s['exchange']}] ({price}) ➜ {reason}\n"
             text += "\n"
     if GLOBAL_LAST_UPDATE["time"]: text += f"🕒 Data Updated: {GLOBAL_LAST_UPDATE['time'].strftime('%H:%M')}"
     return text
@@ -325,7 +326,7 @@ def get_global_sell_text():
             for s in top_picks:
                 price = f"{s['price']:,.2f}"
                 reason = s['reasons'][0] if s['reasons'] else "Downtrend"
-                text += f" • `{s['symbol']}` ({price}) ➜ {reason}\n"
+                text += f" • `{s['symbol']}` [{s['exchange']}] ({price}) ➜ {reason}\n"
             text += "\n"
     return text
 
@@ -460,6 +461,7 @@ def run_strategy(SYMBOL, EXCHANGE):
         "text": f"""
 📊 *PRO MARKET SIGNAL*
 📌 Symbol : {SYMBOL}
+🏢 Market : {EXCHANGE}
 💰 Price  : {last['close']:,.2f}
 
 📈 Trend  : {trend_st}
