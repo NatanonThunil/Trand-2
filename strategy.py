@@ -6,6 +6,7 @@ import requests
 from datetime import datetime
 import time
 import matplotlib
+import matplotlib.pyplot as plt
 import matplotlib.lines as mlines # สำหรับวาด Legend
 import numpy as np
 matplotlib.use('Agg')
