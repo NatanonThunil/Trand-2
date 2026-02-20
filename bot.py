@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
+# ดึง URL จาก Environment Variable
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", None) 
 
 logging.basicConfig(
@@ -33,6 +34,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     logger.critical("❌ ไม่พบ BOT_TOKEN! ตรวจสอบไฟล์ .env")
     exit(1)
+
 # ==========================================
 # 🧩 IMPORTS
 # ==========================================
@@ -44,13 +46,10 @@ try:
 
     from strategy import (
         run_strategy,
-        # Scanners
         scan_top_th_symbols, scan_top_cn_symbols, scan_top_hk_symbols, scan_top_us_stock_symbols, scan_top_crypto_symbols,
         scan_top_th_sell_symbols, scan_top_cn_sell_symbols, scan_top_hk_sell_symbols, scan_top_us_stock_sell_symbols, scan_top_crypto_sell_symbols,
-        # Getters
         get_top_th_text, get_top_cn_text, get_top_hk_text, get_top_us_stock_text, get_top_crypto_text, get_global_top_text,
         get_top_th_sell_text, get_top_cn_sell_text, get_top_hk_sell_text, get_top_us_stock_sell_text, get_top_crypto_sell_text, get_global_sell_text,
-        # Heavy Jobs
         run_scan_asia_market, run_scan_th_market, run_scan_us_market
     )
     
@@ -73,42 +72,74 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is active and awake!")
 
-    # ✅ เพิ่มบล็อกนี้เข้าไป เพื่อรับรองคำสั่ง HEAD
     def do_HEAD(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080)) 
+    try:
+        server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+        logger.info(f"🌍 Web Server running on port {port}")
+        server.serve_forever()
+    except OSError as e:
+        logger.warning(f"⚠️ Web Server Error: {e}")
+
+# ======================
+# 🔔 KEEP-ALIVE PING (อัปเกรดให้ยิงถี่ขึ้นและหลบการบล็อก)
+# ======================
+def keep_alive_ping():
+    port = os.environ.get("PORT", 8080)
+    url = RENDER_EXTERNAL_URL
+    
+    if not url:
+        logger.error("🚨 WARNING: ไม่พบ RENDER_EXTERNAL_URL ใน Env Variables! บอทอาจจะหลับได้ แนะนำให้ไปตั้งค่าใน Render")
+        url = f"http://127.0.0.1:{port}"
+    else:
+        logger.info(f"📡 Keep-Alive Target: {url}")
         
+    time.sleep(15) # รอให้ server เริ่มทำงานก่อน
+    
+    # จำลองว่าเป็นคนเปิด Browser จริงๆ
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+
+    while True:
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code != 200:
+                logger.warning(f"⚠️ Ping returned status code: {res.status_code}")
+        except Exception as e:
+            logger.warning(f"⚠️ Self-Ping failed: {e}")
+        
+        time.sleep(300) # ✅ แก้เป็นยิงทุกๆ 5 นาที (300 วินาที) ชัวร์กว่า
+
 # ======================
 # 🎨 UI HELPERS (Progress Bar)
 # ======================
 def make_progress_bar(percent, length=12):
-    """สร้างหลอดโหลดแบบ Text: [█████░░░░░]"""
     filled_length = int(length * percent // 100)
     bar = '█' * filled_length + '░' * (length - filled_length)
     return bar
 
 # ======================
-# 🛠 HELPER (SCAN + PROGRESS) -> แก้จุดนี้เพื่อให้ Non-blocking
+# 🛠 HELPER (SCAN + PROGRESS)
 # ======================
 async def execute_scan_command(update: Update, scan_func, get_text_func, market_name: str):
-    # ส่งข้อความเริ่มต้นพร้อม Progress Bar 0%
     start_msg_text = f"📡 *INITIALIZING SCAN...*\n🔍 Target: *{market_name}*\n\n`[░░░░░░░░░░░░] 0%`"
     status_msg = await update.message.reply_text(start_msg_text, parse_mode="Markdown")
     
-    # ตัวแปรสำหรับคุมความถี่การอัปเดต (Telegram จำกัดการ Edit)
     last_update_time = 0
     loop = asyncio.get_running_loop()
 
-    # ฟังก์ชัน Callback ที่จะถูกเรียกจาก strategy.py ใน Thread แยก
     def progress_callback(current, total):
         nonlocal last_update_time
-        # อัปเดตทุกๆ 2.5 วินาที หรือเมื่อเสร็จ (เพื่อความเนียน)
         if time.time() - last_update_time > 2.5 or current == total:
             percent = int((current / total) * 100)
-            bar = make_progress_bar(percent, length=12) # สร้างหลอด
+            bar = make_progress_bar(percent, length=12) 
             
-            # ข้อความอัปเดตสวยๆ
             text = (
                 f"📡 *SCANNING MARKET...*\n"
                 f"🎯 Target: *{market_name}*\n"
@@ -116,9 +147,7 @@ async def execute_scan_command(update: Update, scan_func, get_text_func, market_
                 f"`[{bar}] {percent}%`\n"
                 f"⏳ _Please wait..._"
             )
-            
             try:
-                # สั่งให้ Event Loop ของบอททำงานอัปเดตข้อความ (Thread-safe)
                 asyncio.run_coroutine_threadsafe(
                     status_msg.edit_text(text, parse_mode="Markdown"), 
                     loop
@@ -127,11 +156,7 @@ async def execute_scan_command(update: Update, scan_func, get_text_func, market_
             last_update_time = time.time()
 
     try:
-        # ✅ รันฟังก์ชันสแกนใน Thread แยก (Executor) เพื่อให้ Main Loop ไม่ค้าง
-        # บอทจะยังรับคำสั่งอื่นได้ระหว่างบรรทัดนี้ทำงาน
         await loop.run_in_executor(None, lambda: scan_func(callback=progress_callback))
-        
-        # เมื่อเสร็จแล้ว ดึงข้อความสรุปมาแสดง
         result_text = get_text_func()
         await status_msg.edit_text(result_text, parse_mode="Markdown")
     except Exception as e:
@@ -141,29 +166,6 @@ async def execute_scan_command(update: Update, scan_func, get_text_func, market_
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"🔥 Update {update} caused error: {context.error}")
 
-# ======================
-# 🔔 KEEP-ALIVE PING 
-# ======================
-def keep_alive_ping():
-    port = os.environ.get("PORT", 8080)
-    # ถ้ามี RENDER_EXTERNAL_URL ให้ยิงไปที่นั่น (ดีที่สุด)
-    # ถ้าไม่มี ให้ยิงเข้า localhost ไปก่อน
-    url = RENDER_EXTERNAL_URL if RENDER_EXTERNAL_URL else f"http://127.0.0.1:{port}"
-    
-    time.sleep(10) # รอให้ server เปิดเสร็จก่อนเริ่ม ping
-    logger.info(f"📡 Keep-Alive Ping target set to: {url}")
-    
-    while True:
-        try:
-            res = requests.get(url, timeout=10)
-            if res.status_code == 200:
-                pass # เงียบๆ ไว้ ไม่ต้องรก log
-            else:
-                logger.warning(f"⚠️ Ping returned status code: {res.status_code}")
-        except Exception as e:
-            logger.warning(f"⚠️ Self-Ping failed: {e}")
-        
-        time.sleep(600) # ยิงทุก 10 นาที
 # ======================
 # 🎮 COMMANDS
 # ======================
@@ -216,7 +218,7 @@ async def top_sell_all(u, c):
 async def top_on(u, c): add_top_notify_user(u.effective_chat.id); await u.message.reply_text("🔔 On")
 async def top_off(u, c): remove_top_notify_user(u.effective_chat.id); await u.message.reply_text("🔕 Off")
 
-# Jobs (Scheduled)
+# Jobs
 async def job_scan_asia(ctx): await asyncio.get_running_loop().run_in_executor(None, run_scan_asia_market)
 async def job_scan_th(ctx): await asyncio.get_running_loop().run_in_executor(None, run_scan_th_market)
 async def job_scan_us(ctx): await asyncio.get_running_loop().run_in_executor(None, run_scan_us_market)
@@ -241,7 +243,6 @@ async def job_check_alerts(ctx):
 # ======================
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
-
     threading.Thread(target=keep_alive_ping, daemon=True).start()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -255,7 +256,7 @@ def main():
     app.add_handler(CommandHandler("top_cn", top_cn)); app.add_handler(CommandHandler("top_hk", top_hk))
     app.add_handler(CommandHandler("top_us", top_us)); app.add_handler(CommandHandler("top_all", top_global))
     
-    app.add_handler(CommandHandler("top_sell", top_sell_crypto)); app.add_handler(CommandHandler("top_sell_th", top_sell_th))
+    app.add_handler(CommandHandler("top_sell", top_crypto)); app.add_handler(CommandHandler("top_sell_th", top_sell_th))
     app.add_handler(CommandHandler("top_sell_cn", top_sell_cn)); app.add_handler(CommandHandler("top_sell_hk", top_sell_hk))
     app.add_handler(CommandHandler("top_sell_us", top_sell_us)); app.add_handler(CommandHandler("top_sell_all", top_sell_all))
     
@@ -269,11 +270,11 @@ def main():
     jq.run_daily(job_notify, time=dt_time(8,0, tzinfo=TH_TZ))
     jq.run_repeating(job_check_alerts, interval=120, first=10)
 
-    logger.info("🤖 Bot Started")
+    logger.info("🤖 Bot Started Ready!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    while True: # วนลูปกันตาย (Auto Restart)
+    while True: # วนลูปกันตาย
         try:
             main()
         except Exception as e:
