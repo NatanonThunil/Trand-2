@@ -1,11 +1,12 @@
 from tvDatafeed import TvDatafeed, Interval
 import pandas as pd
-import mplfinance as mpf
+import mplfinance as mpf 
 import os
 import requests 
 from datetime import datetime
 import time
 import matplotlib
+import matplotlib.lines as mlines # สำหรับวาด Legend
 import numpy as np
 matplotlib.use('Agg')
 
@@ -46,10 +47,6 @@ def get_stock_symbols_scanner(region="thailand", limit=5000):
         "sort": {"sortBy": "volume", "sortOrder": "desc"},
         "range": [0, limit]
     }
-    if region == "thailand": payload["filter"].append({"left": "exchange", "operation": "equal", "right": "SET"})
-    elif region == "hongkong": payload["filter"].append({"left": "exchange", "operation": "equal", "right": "HKEX"})
-    elif region == "china": payload["filter"].append({"left": "exchange", "operation": "in_range", "right": ["SSE", "SZSE"]})
-    elif region == "america": payload["filter"].append({"left": "exchange", "operation": "in_range", "right": ["NASDAQ", "NYSE"]})
     try:
         response = requests.post(url, json=payload, timeout=20)
         data = response.json()
@@ -69,14 +66,14 @@ def get_top_usdt_symbols_by_volume(limit=100):
 # 🧠 CORE ANALYSIS (PRO TRADER EDITION 🎯)
 # =====================
 def calculate_indicators(df):
-    """คำนวณอินดิเคเตอร์แบบ Multi-Dimensional (Trend, Momentum, Volatility, Volume)"""
+    """คำนวณอินดิเคเตอร์แบบ Multi-Dimensional"""
     # 1. Trend Indicators
     df['ema_fast'] = df['close'].ewm(span=9, adjust=False).mean()
     df['ema_slow'] = df['close'].ewm(span=21, adjust=False).mean()
-    df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()   # เทรนด์ระยะกลาง
-    df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean() # เทรนด์ระยะยาว
+    df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()   
+    df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean() 
     
-    # 2. Momentum Indicators (RSI & MACD)
+    # 2. Momentum Indicators
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -89,7 +86,7 @@ def calculate_indicators(df):
     df['signal_line'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['hist'] = df['macd'] - df['signal_line']
     
-    # 3. Volatility & Support/Resistance (Bollinger Bands & ATR)
+    # 3. Volatility & Support/Resistance
     df['bb_mid'] = df['close'].rolling(window=20).mean()
     df['bb_std'] = df['close'].rolling(window=20).std()
     df['bb_upper'] = df['bb_mid'] + (2 * df['bb_std'])
@@ -113,15 +110,12 @@ def analyze_chart(df, mode="BUY"):
     if df is None or len(df) < 200: return 0, [], 0
     
     df = calculate_indicators(df)
-    
     curr = df.iloc[-1]
     prev = df.iloc[-2]
     
-    score = 0
-    reasons = []
+    score = 0; reasons = []
     
     if mode == "BUY":
-        # Rule 1: Trend Alignment
         is_uptrend = (curr['close'] > curr['ema_200']) and (curr['ema_50'] > curr['ema_200'])
         if not is_uptrend:
             score -= 10
@@ -130,7 +124,6 @@ def analyze_chart(df, mode="BUY"):
             score += 3
             reasons.append("✅ Uptrend Confirmed")
 
-            # Rule 2: Value Zone
             if curr['close'] < curr['bb_upper']:
                 score += 1
                 if curr['close'] <= curr['bb_mid'] * 1.02: 
@@ -140,7 +133,6 @@ def analyze_chart(df, mode="BUY"):
                 score -= 2
                 reasons.append("⚠️ Overextended (ราคาแพงไป)")
 
-            # Rule 3: Momentum & Volume
             if prev['macd'] < prev['signal_line'] and curr['macd'] > curr['signal_line']:
                 score += 2
                 reasons.append("🚀 MACD Golden Cross")
@@ -204,7 +196,7 @@ def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", lim
             if exchange == "SZSE": exchange = "SZSE"
             df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_hour, n_bars=250)
             score, reasons, price = analyze_chart(df, mode=mode)
-            if score >= 6: # ปรับเกณฑ์ขึ้นเพราะเงื่อนไขเยอะขึ้น
+            if score >= 6: 
                 results.append({ "symbol": symbol, "exchange": exchange, "price": price, "score": score, "reasons": reasons, "region": region_name })
             time.sleep(0.01)
         except: continue
@@ -276,7 +268,6 @@ def format_top_text(title, cache_data, decimals=2, is_sell=False):
     text = f"{icon} *TOP 5 {title}* (1H)\n\n"
     for i, s in enumerate(cache_data["results"][:5], 1):
         price_fmt = f"{s['price']:,.{decimals}f}"
-        # ✅ เพิ่มชื่อตลาด (Exchange) ต่อท้ายชื่อหุ้น
         text += f"🔥 *{i}. {s['symbol']}* `[{s['exchange']}]`\n💰 {price_fmt}\n💡 {' + '.join(s['reasons'])}\n\n"
     if cache_data['updated_at']: text += f"🕒 Updated: {cache_data['updated_at'].strftime('%H:%M')}"
     return text
@@ -347,7 +338,6 @@ def run_strategy(SYMBOL, EXCHANGE):
     df["datetime"] = pd.to_datetime(df["datetime"])
     df.set_index("datetime", inplace=True)
 
-    # ✅ ใช้การคำนวณ Pro Trader
     df = calculate_indicators(df)
 
     capital = INITIAL_CAPITAL; position = 0; trades = 0; trade_pnls = []
@@ -356,11 +346,9 @@ def run_strategy(SYMBOL, EXCHANGE):
     for i in range(200, len(df) - 1):
         curr = df.iloc[i]; prev = df.iloc[i-1]
         
-        # 🟢 BUY CONDITION: Pro Logic
         is_uptrend = (curr['close'] > curr['ema_200']) and (curr['ema_50'] > curr['ema_200'])
         buy_condition = is_uptrend and (prev['macd'] < prev['signal_line']) and (curr['macd'] > curr['signal_line']) and (curr['rsi'] < 70)
 
-        # 🔴 SELL CONDITION: ออกเมื่อ MACD ตัดลง
         sell_condition = (prev['macd'] > prev['signal_line']) and (curr['macd'] < curr['signal_line'])
 
         if position == 0 and buy_condition:
@@ -389,30 +377,36 @@ def run_strategy(SYMBOL, EXCHANGE):
     rrr = avg_win / avg_loss if avg_loss != 0 else 0
     
     # =========================================
-    # 🕯️ PLOT CANDLESTICK CHART (FIXED Zero-size)
+    # 🕯️ PLOT CANDLESTICK CHART (PRO CHART + LEGEND)
     # =========================================
     df_plot = df.iloc[-200:].copy()
 
     buy_signals = df_plot['signal_price'].where(df_plot['signal'] == 1, np.nan)
     sell_signals = df_plot['signal_price'].where(df_plot['signal'] == -1, np.nan)
 
+    # 1. Base Indicators
     apds = [
         mpf.make_addplot(df_plot['ema_200'], color='purple', width=1.5, panel=0),
         mpf.make_addplot(df_plot['ema_50'], color='cyan', width=1, panel=0),
     ]
 
-    # ป้องกัน Error ถ้าไม่มีสัญญาณซื้อขายในช่วงนี้
+    # 2. Buy/Sell Signals (Check for NaN to prevent errors)
     if not buy_signals.isna().all():
         apds.append(mpf.make_addplot(buy_signals, type='scatter', markersize=120, marker='^', color='lime', panel=0))
     if not sell_signals.isna().all():
         apds.append(mpf.make_addplot(sell_signals, type='scatter', markersize=120, marker='v', color='red', panel=0))
 
+    # 3. MACD Histogram (Fix color length issue by ensuring it matches the plotted data)
+    # We create a specific color array for the exact length of the plotted data
+    macd_colors = ['green' if val >= 0 else 'red' for val in df_plot['hist']]
+    
     apds.extend([
-        mpf.make_addplot(df_plot['hist'], type='bar', width=0.7, panel=1, color=['green' if x >= 0 else 'red' for x in df_plot['hist']], alpha=0.6, ylabel='MACD'),
+        mpf.make_addplot(df_plot['hist'], type='bar', width=0.7, panel=1, color=macd_colors, alpha=0.6, ylabel='MACD'),
         mpf.make_addplot(df_plot['macd'], color='blue', width=1, panel=1),
         mpf.make_addplot(df_plot['signal_line'], color='orange', width=1, panel=1),
     ])
 
+    # 4. Styling
     mc = mpf.make_marketcolors(up='green', down='red', edge='inherit', wick='inherit', volume='in')
     s  = mpf.make_mpf_style(
         marketcolors=mc, 
@@ -427,7 +421,8 @@ def run_strategy(SYMBOL, EXCHANGE):
     os.makedirs(chart_dir, exist_ok=True)
     chart_path = os.path.join(chart_dir, f"{SYMBOL}_adv_candle.png")
 
-    mpf.plot(
+    # 5. Plot Generation
+    fig, axlist = mpf.plot(
         df_plot,
         type='candle',
         style=s,
@@ -439,9 +434,33 @@ def run_strategy(SYMBOL, EXCHANGE):
         figsize=(14, 10),
         scale_padding={'top': 1.5, 'bottom': 1.0, 'left': 0.8, 'right': 1.5},
         tight_layout=True,
-        savefig=chart_path
+        returnfig=True 
     )
 
+    # 6. Legends Configuration
+    ema200_line = mlines.Line2D([], [], color='purple', linewidth=1.5, label='EMA 200 (Major Trend)')
+    ema50_line = mlines.Line2D([], [], color='cyan', linewidth=1, label='EMA 50 (Mid Trend)')
+    buy_marker = mlines.Line2D([], [], color='none', marker='^', markerfacecolor='lime', markeredgecolor='lime', markersize=10, label='BUY Signal')
+    sell_marker = mlines.Line2D([], [], color='none', marker='v', markerfacecolor='red', markeredgecolor='red', markersize=10, label='SELL Signal')
+    
+    # Add legend to the main price chart
+    axlist[0].legend(handles=[ema200_line, ema50_line, buy_marker, sell_marker], loc='upper left', fontsize=10, framealpha=0.9)
+
+    # Add legend to the MACD chart
+    macd_line = mlines.Line2D([], [], color='blue', linewidth=1, label='MACD Line')
+    sig_line = mlines.Line2D([], [], color='orange', linewidth=1, label='Signal Line')
+    try:
+        # axlist[2] is usually the MACD panel if volume is panel 2
+        axlist[2].legend(handles=[macd_line, sig_line], loc='upper left', fontsize=10, framealpha=0.9)
+    except: 
+        pass 
+
+    fig.savefig(chart_path)
+    plt.close(fig) 
+    
+    # =========================================
+    # STATUS & RETURN
+    # =========================================
     last = df.iloc[-1]
     trend_st = "BULLISH 🟢" if (last['close'] > last['ema_200'] and last['ema_50'] > last['ema_200']) else "BEARISH 🔴"
     
