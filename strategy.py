@@ -114,71 +114,109 @@ def analyze_chart(df, mode="BUY"):
     curr = df.iloc[-1]
     prev = df.iloc[-2]
     
-    score = 0; reasons = []
+    score = 0
+    reasons = []
     
     if mode == "BUY":
+        # 🛑 Rule 1: Trend Alignment (เข้มงวดขึ้น)
+        # ไม่ใช่แค่อยู่เหนือ EMA200 แต่เส้นต้องเรียงตัวสวย (Perfect Uptrend)
+        perfect_uptrend = (curr['ema_fast'] > curr['ema_slow']) and \
+                          (curr['ema_slow'] > curr['ema_50']) and \
+                          (curr['ema_50'] > curr['ema_200']) and \
+                          (curr['close'] > curr['ema_fast'])
+                          
         is_uptrend = (curr['close'] > curr['ema_200']) and (curr['ema_50'] > curr['ema_200'])
-        if not is_uptrend:
-            score -= 10
-            reasons.append("❌ Counter Trend (สวนเทรนด์หลัก)")
+
+        if perfect_uptrend:
+            score += 4
+            reasons.append("🔥 Perfect Uptrend (เทรนด์ขาขึ้นแข็งแกร่ง)")
+        elif is_uptrend:
+            score += 2
+            reasons.append("✅ Uptrend Confirmed (ยืนเหนือแนวรับหลัก)")
         else:
+            score -= 10 # สวนเทรนด์ ตัดทิ้งทันที
+            reasons.append("❌ Counter Trend")
+
+        # 🛑 Rule 2: Price Action & Support/Resistance
+        if curr['close'] < curr['bb_upper']:
+            # ซื้อที่แนวรับ (Buy the Dip)
+            if curr['bb_lower'] < curr['close'] <= curr['bb_mid'] * 1.02: 
+                score += 3
+                reasons.append("💎 Value Zone (เด้งแนวรับต้นรอบ)")
+            # เพิ่งเริ่มเบรกจากโซนสะสม
+            elif prev['close'] < curr['bb_mid'] and curr['close'] > curr['bb_mid']:
+                score += 2
+                reasons.append("🚀 Mid-Band Breakout (เริ่มมีแรงส่ง)")
+        else:
+            score -= 3
+            reasons.append("⚠️ Overextended (ราคาแพงไป ระวังย่อ)")
+
+        # 🛑 Rule 3: Momentum (MACD & RSI)
+        if prev['macd'] < prev['signal_line'] and curr['macd'] > curr['signal_line']:
             score += 3
-            reasons.append("✅ Uptrend Confirmed")
+            reasons.append("🎯 MACD Golden Cross (จุดเข้าสุดคม)")
+        elif curr['macd'] > curr['signal_line'] and curr['hist'] > prev['hist'] and curr['hist'] > 0:
+            score += 1
+            reasons.append("📈 Strong Momentum")
 
-            if curr['close'] < curr['bb_upper']:
+        # RSI ต้องมีพื้นที่วิ่ง ไม่ตึงเกินไป
+        if 45 <= curr['rsi'] <= 65:
+            score += 2
+            reasons.append(f"⚖️ RSI Healthy ({curr['rsi']:.0f})")
+        elif curr['rsi'] > 75:
+            score -= 5 # ห้ามซื้อตอน RSI ตึงเปรี๊ยะ
+            reasons.append("🔥 RSI Overbought (อันตราย)")
+
+        # 🛑 Rule 4: Smart Money Footprint (Volume)
+        if curr['vol_sma'] > 0:
+            if curr['volume'] > (curr['vol_sma'] * 2.0) and curr['close'] > curr['open']:
+                score += 3
+                reasons.append("🐳 Massive Volume (รายใหญ่เข้าดันราคา)")
+            elif curr['volume'] > (curr['vol_sma'] * 1.2) and curr['close'] > curr['open']:
                 score += 1
-                if curr['close'] <= curr['bb_mid'] * 1.02: 
-                    score += 2
-                    reasons.append("💎 Value Zone (ได้ราคาต้นรอบ)")
-            else:
-                score -= 2
-                reasons.append("⚠️ Overextended (ราคาแพงไป)")
+                reasons.append("📊 Volume Supported")
 
-            if prev['macd'] < prev['signal_line'] and curr['macd'] > curr['signal_line']:
-                score += 2
-                reasons.append("🚀 MACD Golden Cross")
-            elif curr['macd'] > curr['signal_line'] and curr['hist'] > prev['hist']:
-                score += 1
-
-            if 40 <= curr['rsi'] <= 65:
-                score += 1
-                reasons.append(f"⚖️ RSI Healthy ({curr['rsi']:.0f})")
-            elif curr['rsi'] > 70:
-                score -= 1
-
-            if curr['vol_sma'] > 0 and curr['volume'] > (curr['vol_sma'] * 1.5) and curr['close'] > curr['open']:
-                score += 2
-                reasons.append("📊 Smart Money In")
-
-    else: # SELL
+    else: # SELL (หาจุด Short หรือหุ้นที่ทรงเสียหนัก)
+        perfect_downtrend = (curr['ema_fast'] < curr['ema_slow']) and \
+                            (curr['ema_slow'] < curr['ema_50']) and \
+                            (curr['ema_50'] < curr['ema_200']) and \
+                            (curr['close'] < curr['ema_fast'])
+                            
         is_downtrend = (curr['close'] < curr['ema_200']) and (curr['ema_50'] < curr['ema_200'])
-        if not is_downtrend:
+
+        if perfect_downtrend:
+            score += 4
+            reasons.append("🩸 Perfect Downtrend (ขาลงเต็มสูบ)")
+        elif is_downtrend:
+            score += 2
+            reasons.append("🔻 Downtrend Confirmed")
+        else:
             score -= 10
             reasons.append("❌ Counter Trend")
+
+        if curr['close'] > curr['bb_lower']:
+            # เด้งขึ้นมาชนต้าน (Pullback Short)
+            if curr['bb_upper'] > curr['close'] >= curr['bb_mid'] * 0.98:
+                score += 3
+                reasons.append("🎯 Pullback Short (เด้งชนต้าน)")
         else:
+            score -= 3
+            reasons.append("⚠️ Oversold (ราคาลงลึกเกินไป)")
+
+        if prev['macd'] > prev['signal_line'] and curr['macd'] < curr['signal_line']:
             score += 3
-            reasons.append("✅ Downtrend Confirmed")
-
-            if curr['close'] > curr['bb_lower']:
-                score += 1
-                if curr['close'] >= curr['bb_mid'] * 0.98:
-                    score += 2
-                    reasons.append("🎯 Pullback Short")
-            else:
-                score -= 2
-
-            if prev['macd'] > prev['signal_line'] and curr['macd'] < curr['signal_line']:
-                score += 2
-                reasons.append("🔻 MACD Death Cross")
+            reasons.append("📉 MACD Death Cross (สัญญาณทุบ)")
+        
+        if 35 <= curr['rsi'] <= 55:
+            score += 2
+            reasons.append(f"⚖️ RSI Valid for Short ({curr['rsi']:.0f})")
+        elif curr['rsi'] < 25:
+            score -= 5
+            reasons.append("🔥 RSI Oversold (อันตราย)")
             
-            if 35 <= curr['rsi'] <= 60:
-                score += 1
-            elif curr['rsi'] < 30:
-                score -= 1
-                
-            if curr['vol_sma'] > 0 and curr['volume'] > (curr['vol_sma'] * 1.5) and curr['close'] < curr['open']:
-                score += 2
-                reasons.append("🩸 Panic Sell")
+        if curr['vol_sma'] > 0 and curr['volume'] > (curr['vol_sma'] * 1.5) and curr['close'] < curr['open']:
+            score += 3
+            reasons.append("🚨 Panic Sell Volume (วอลลุ่มเทขายกระจุย)")
 
     return score, reasons, curr['close']
 
@@ -197,7 +235,7 @@ def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", lim
             if exchange == "SZSE": exchange = "SZSE"
             df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_hour, n_bars=250)
             score, reasons, price = analyze_chart(df, mode=mode)
-            if score >= 6: 
+            if score >= 8: # ตั้งเกณฑ์เข้มงวดขึ้นสำหรับตลาดหุ้น
                 results.append({ "symbol": symbol, "exchange": exchange, "price": price, "score": score, "reasons": reasons, "region": region_name })
             time.sleep(0.01)
         except: continue
@@ -217,7 +255,7 @@ def _scan_crypto(cache_dict, mode="BUY", limit=100, callback=None):
         try:
             df = tv.get_hist(symbol=symbol, exchange="BINANCE", interval=Interval.in_1_hour, n_bars=250)
             score, reasons, price = analyze_chart(df, mode=mode)
-            if score >= 6:
+            if score >= 8: # เกณฑ์สำหรับคริปโตอาจจะเข้มงวดน้อยลงเพราะความผันผวนสูง
                 results.append({ "symbol": symbol, "exchange": "BINANCE", "price": price, "score": score, "reasons": reasons, "region": "CRYPTO" })
             time.sleep(0.01)
         except: continue
