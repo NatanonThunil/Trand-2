@@ -35,10 +35,10 @@ if not BOT_TOKEN:
     logger.critical("❌ ไม่พบ BOT_TOKEN! ตรวจสอบไฟล์ .env")
     exit(1)
 
-# ✅ 1. สร้าง Thread Pool รองรับคนได้ 20 คนพร้อมกัน
+# ✅ สร้าง Thread Pool สำหรับทำงานหนักคู่ขนานกัน (20 คนพร้อมกันสบายๆ)
 executor = ThreadPoolExecutor(max_workers=20)
 
-# ✅ 2. สร้าง Lock เพื่อป้องกันกราฟ (Matplotlib) พังเวลาโดนแย่งวาดพร้อมกัน
+# ✅ Lock ป้องกัน Matplotlib พัง (ใช้เฉพาะตอนวาดกราฟ /signal)
 signal_lock = asyncio.Lock()
 
 # ==========================================
@@ -100,24 +100,17 @@ def keep_alive_ping():
     url = RENDER_EXTERNAL_URL
     
     if not url:
-        logger.error("🚨 WARNING: ไม่พบ RENDER_EXTERNAL_URL ใน Env Variables! บอทอาจจะหลับได้")
+        logger.error("🚨 WARNING: ไม่พบ RENDER_EXTERNAL_URL ใน Env Variables!")
         url = f"http://127.0.0.1:{port}"
-    else:
-        logger.info(f"📡 Keep-Alive Target: {url}")
-        
+    
     time.sleep(15)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     while True:
         try:
-            res = requests.get(url, headers=headers, timeout=10)
-            if res.status_code != 200:
-                logger.warning(f"⚠️ Ping returned status code: {res.status_code}")
-        except Exception as e:
-            logger.warning(f"⚠️ Self-Ping failed: {e}")
-        
+            requests.get(url, headers=headers, timeout=10)
+        except Exception:
+            pass
         time.sleep(300)
 
 # ======================
@@ -129,11 +122,14 @@ def make_progress_bar(percent, length=12):
     return bar
 
 # ======================
-# 🛠 HELPER (SCAN + PROGRESS) 
+# 🛠 BACKGROUND TASKS (✅ หัวใจหลักของการแก้ปัญหา)
 # ======================
-async def execute_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE, scan_func, get_text_func, market_name: str):
+async def _scan_bg_task(chat_id: int, bot, scan_func, get_text_func, market_name: str):
+    """ฟังก์ชันที่จะถูกโยนไปรันเบื้องหลัง ทำให้บอทไม่ค้าง"""
     start_msg_text = f"📡 *INITIALIZING SCAN...*\n🔍 Target: *{market_name}*\n\n`[░░░░░░░░░░░░] 0%`"
-    status_msg = await update.message.reply_text(start_msg_text, parse_mode="Markdown")
+    
+    # ส่งข้อความไปก่อน แล้วเก็บ Message ID ไว้แก้ไขทีหลัง
+    status_msg = await bot.send_message(chat_id=chat_id, text=start_msg_text, parse_mode="Markdown")
     
     last_update_time = time.time()
     loop = asyncio.get_running_loop()
@@ -141,11 +137,10 @@ async def execute_scan_command(update: Update, context: ContextTypes.DEFAULT_TYP
     def progress_callback(current, total):
         nonlocal last_update_time
         now = time.time()
-        # กันโดนแบนจาก Telegram (Edit ได้จำกัดต่อวินาที)
+        # อัปเดตทุกๆ 3 วินาที (ป้องกัน Telegram บล็อกฐานสแปมข้อความ)
         if now - last_update_time > 3.0 or current == total:
             percent = int((current / total) * 100)
             bar = make_progress_bar(percent, length=12) 
-            
             text = (
                 f"📡 *SCANNING MARKET...*\n"
                 f"🎯 Target: *{market_name}*\n"
@@ -154,55 +149,58 @@ async def execute_scan_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"⏳ _Please wait..._"
             )
             try:
-                # โยนการอัปเดตข้อความกลับไปที่ Loop หลัก
+                # ส่งคำสั่งแก้ไขข้อความกลับไปที่คิวหลัก
                 asyncio.run_coroutine_threadsafe(
-                    status_msg.edit_text(text, parse_mode="Markdown"), 
+                    bot.edit_message_text(text=text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode="Markdown"), 
                     loop
                 )
-            except Exception as e: 
-                pass
-            
+            except Exception: pass
             last_update_time = time.time()
 
     try:
-        # ✅ ใช้ await คู่กับ run_in_executor เพื่อปลดล็อคให้คนอื่นใช้งานบอทต่อได้ทันที
+        # 🚀 โยนภาระงานสแกน (Pandas/Requests) ลง ThreadPool ทันที!
         await loop.run_in_executor(executor, lambda: scan_func(callback=progress_callback))
         result_text = get_text_func()
-        await status_msg.edit_text(result_text, parse_mode="Markdown")
+        await bot.edit_message_text(text=result_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Scan Error ({market_name}): {e}")
-        await status_msg.edit_text(f"❌ *SYSTEM ERROR*\n`{e}`", parse_mode="Markdown")
+        await bot.edit_message_text(text=f"❌ *SYSTEM ERROR*\n`{e}`", chat_id=chat_id, message_id=status_msg.message_id, parse_mode="Markdown")
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"🔥 Update {update} caused error: {context.error}")
-
-# ======================
-# 🎮 COMMANDS
-# ======================
-async def start(u, c): await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
-async def help_cmd(u, c): await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
-
-async def signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    if not c.args or len(c.args)<2: return await u.message.reply_text("Usage: /signal BTCUSDT BINANCE")
-    
-    msg = await u.message.reply_text("⏳ Analyzing Data & Generating Chart...")
-    
+async def _signal_bg_task(chat_id: int, bot, symbol: str, exchange: str):
+    """ฟังก์ชันวาดกราฟเบื้องหลัง"""
+    msg = await bot.send_message(chat_id=chat_id, text="⏳ Analyzing Data & Generating Chart...")
     try:
         loop = asyncio.get_running_loop()
         
-        # ✅ ใช้ Lock จัดคิวคนวาดกราฟ (ให้วาดทีละ 1 รูป กัน Matplotlib พัง)
+        # คิวการสร้างกราฟ (วาดทีละรูป ป้องกัน Matplotlib พัง)
         async with signal_lock:
-            res = await loop.run_in_executor(executor, run_strategy, c.args[0].upper(), c.args[1].upper())
+            res = await loop.run_in_executor(executor, run_strategy, symbol, exchange)
         
-        await msg.delete()
-        await u.message.reply_text(res["text"], parse_mode="Markdown")
+        await bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
+        await bot.send_message(chat_id=chat_id, text=res["text"], parse_mode="Markdown")
+        
         if res["chart"] and os.path.exists(res["chart"]):
             with open(res["chart"], "rb") as p: 
-                await u.message.reply_photo(p)
+                await bot.send_photo(chat_id=chat_id, photo=p)
             os.remove(res["chart"])
             
     except Exception as e: 
-        await msg.edit_text(f"❌ Error: {e}")
+        await bot.edit_message_text(text=f"❌ Error: {e}", chat_id=chat_id, message_id=msg.message_id)
+
+# ======================
+# 🎮 COMMAND HANDLERS (✅ เปลี่ยนให้ลื่นไหล 100%)
+# ======================
+async def execute_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE, scan_func, get_text_func, market_name: str):
+    # 🎯 ใช้ create_task เพื่อ "สั่งงานแล้วปล่อยเลย" บอทจะว่างรับคนต่อไปทันที
+    asyncio.create_task(_scan_bg_task(update.effective_chat.id, context.bot, scan_func, get_text_func, market_name))
+
+async def signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    if not c.args or len(c.args)<2: return await u.message.reply_text("Usage: /signal BTCUSDT BINANCE")
+    # 🎯 ใช้ create_task วาดกราฟเบื้องหลัง 
+    asyncio.create_task(_signal_bg_task(u.effective_chat.id, c.bot, c.args[0].upper(), c.args[1].upper()))
+
+async def start(u, c): await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
+async def help_cmd(u, c): await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
 
 async def alert(u, c):
     if not c.args or len(c.args)!=4: return await u.message.reply_text("Ex: /alert BTCUSDT BINANCE above 50000")
@@ -238,7 +236,12 @@ async def top_sell_all(u, c):
 async def top_on(u, c): add_top_notify_user(u.effective_chat.id); await u.message.reply_text("🔔 On")
 async def top_off(u, c): remove_top_notify_user(u.effective_chat.id); await u.message.reply_text("🔕 Off")
 
-# Jobs
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"🔥 Update {update} caused error: {context.error}")
+
+# ======================
+# 🕒 SCHEDULER JOBS
+# ======================
 async def job_scan_asia(ctx): await asyncio.get_running_loop().run_in_executor(executor, run_scan_asia_market)
 async def job_scan_th(ctx): await asyncio.get_running_loop().run_in_executor(executor, run_scan_th_market)
 async def job_scan_us(ctx): await asyncio.get_running_loop().run_in_executor(executor, run_scan_us_market)
@@ -265,7 +268,8 @@ def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # เปิดใช้งานการรับคำสั่งคู่ขนานแบบเต็มสูบ
+    app = ApplicationBuilder().token(BOT_TOKEN).concurrent_updates(True).build()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
