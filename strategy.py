@@ -223,58 +223,149 @@ def analyze_chart(df, mode="BUY"):
 # =====================
 # 🚀 SCANNER ENGINE
 # =====================
-def scan_generic_market(region_name, scanner_region, cache_dict, mode="BUY", limit=500, callback=None):
-    targets = get_stock_symbols_scanner(scanner_region, limit=limit)
+def update_and_fill_market(region_name, scanner_region, cache_dict, mode="BUY", limit=500, callback=None):
+    """
+    ระบบสแกนแบบฉลาด: เช็ค Top 5 ตัวเดิมก่อน ถ้ายังสวยเก็บไว้ 
+    ถ้าไม่สวยค่อยสแกนหาตัวใหม่มาเติมให้เต็ม 5 ตัว
+    """
     tv = TvDatafeed()
-    results = []
+    current_top = []
+    
+    # --- STEP 1: ตรวจสอบ Top 5 ตัวเดิม (ถ้ามี) ---
+    old_results = cache_dict.get("results", [])
+    if old_results:
+        # print(f"Checking existing Top {len(old_results)} for {region_name}...")
+        for s in old_results:
+            try:
+                df = tv.get_hist(symbol=s['symbol'], exchange=s['exchange'], interval=Interval.in_1_hour, n_bars=250)
+                score, reasons, price = analyze_chart(df, mode=mode)
+                
+                # ถ้าคะแนนยังผ่านเกณฑ์ 8 คะแนน (Pro Setup) ให้เก็บไว้
+                if score >= 8:
+                    current_top.append({
+                        "symbol": s['symbol'], "exchange": s['exchange'], 
+                        "price": price, "score": score, "reasons": reasons, "region": region_name
+                    })
+                time.sleep(0.01)
+            except: continue
+
+    # ถ้าระบบเดิมยังแข็งแกร่งครบ 5 ตัว ไม่ต้องสแกนใหม่ให้เสียเวลา
+    if len(current_top) >= 5:
+        # เรียงตามคะแนน
+        current_top = sorted(current_top, key=lambda x: x["score"], reverse=True)[:5]
+        cache_dict["updated_at"] = datetime.now()
+        cache_dict["results"] = current_top
+        if callback: callback(1, 1) # บอกบอทว่าเสร็จ 100%
+        return current_top
+
+    # --- STEP 2: สแกนหาตัวใหม่มาเติมให้เต็ม 5 ---
+    targets = get_stock_symbols_scanner(scanner_region, limit=limit)
+    
+    # กรองตัวที่อยู่ใน Top ปัจจุบันออกไปแล้ว จะได้ไม่สแกนซ้ำ
+    existing_symbols = [x['symbol'] for x in current_top]
+    targets = [t for t in targets if t[0] not in existing_symbols]
+    
     total = len(targets)
+    needed = 5 - len(current_top)
     
     for i, (symbol, exchange) in enumerate(targets):
         if callback: callback(i, total)
+        
+        # ถ้าได้ครบ 5 ตัวแล้ว หยุดสแกนทันที! (ประหยัดเวลามาก)
+        if len(current_top) >= 5:
+            break
+            
         try:
             if exchange == "SZSE": exchange = "SZSE"
             df = tv.get_hist(symbol=symbol, exchange=exchange, interval=Interval.in_1_hour, n_bars=250)
             score, reasons, price = analyze_chart(df, mode=mode)
-            if score >= 8: # ตั้งเกณฑ์เข้มงวดขึ้นสำหรับตลาดหุ้น
-                results.append({ "symbol": symbol, "exchange": exchange, "price": price, "score": score, "reasons": reasons, "region": region_name })
+            
+            if score >= 8:
+                current_top.append({
+                    "symbol": symbol, "exchange": exchange, 
+                    "price": price, "score": score, "reasons": reasons, "region": region_name
+                })
             time.sleep(0.01)
         except: continue
 
+    # เรียงลำดับตัวท็อป 5 ตัว (เก่า+ใหม่ผสมกัน) ให้คนได้คะแนนสูงสุดขึ้นก่อน
+    current_top = sorted(current_top, key=lambda x: x["score"], reverse=True)[:5]
+    
     cache_dict["updated_at"] = datetime.now()
-    cache_dict["results"] = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
-    return results
+    cache_dict["results"] = current_top
+    if callback: callback(1, 1) # ส่ง 100% ตอนจบ
+    return current_top
 
-def _scan_crypto(cache_dict, mode="BUY", limit=100, callback=None):
-    SYMBOLS = get_top_usdt_symbols_by_volume(limit=limit)
+
+def _scan_crypto_stateful(cache_dict, mode="BUY", limit=100, callback=None):
+    """ระบบสแกน Crypto แบบเดียวกับหุ้น (เช็คของเก่าก่อน)"""
     tv = TvDatafeed()
-    results = []
+    current_top = []
+    
+    # 1. เช็คของเดิม
+    old_results = cache_dict.get("results", [])
+    if old_results:
+        for s in old_results:
+            try:
+                df = tv.get_hist(symbol=s['symbol'], exchange="BINANCE", interval=Interval.in_1_hour, n_bars=250)
+                score, reasons, price = analyze_chart(df, mode=mode)
+                if score >= 8:
+                    current_top.append({
+                        "symbol": s['symbol'], "exchange": "BINANCE", 
+                        "price": price, "score": score, "reasons": reasons, "region": "CRYPTO"
+                    })
+                time.sleep(0.01)
+            except: continue
+
+    if len(current_top) >= 5:
+        current_top = sorted(current_top, key=lambda x: x["score"], reverse=True)[:5]
+        cache_dict["updated_at"] = datetime.now()
+        cache_dict["results"] = current_top
+        if callback: callback(1, 1)
+        return current_top
+
+    # 2. หาตัวใหม่มาเติม
+    SYMBOLS = get_top_usdt_symbols_by_volume(limit=limit)
+    existing_symbols = [x['symbol'] for x in current_top]
+    SYMBOLS = [s for s in SYMBOLS if s not in existing_symbols]
+    
     total = len(SYMBOLS)
     
     for i, symbol in enumerate(SYMBOLS):
         if callback: callback(i, total)
+        if len(current_top) >= 5: break # ได้ครบแล้วหยุด
+            
         try:
             df = tv.get_hist(symbol=symbol, exchange="BINANCE", interval=Interval.in_1_hour, n_bars=250)
             score, reasons, price = analyze_chart(df, mode=mode)
-            if score >= 8: # เกณฑ์สำหรับคริปโตอาจจะเข้มงวดน้อยลงเพราะความผันผวนสูง
-                results.append({ "symbol": symbol, "exchange": "BINANCE", "price": price, "score": score, "reasons": reasons, "region": "CRYPTO" })
+            if score >= 8:
+                current_top.append({
+                    "symbol": symbol, "exchange": "BINANCE", 
+                    "price": price, "score": score, "reasons": reasons, "region": "CRYPTO"
+                })
             time.sleep(0.01)
         except: continue
+        
+    current_top = sorted(current_top, key=lambda x: x["score"], reverse=True)[:5]
     cache_dict["updated_at"] = datetime.now()
-    cache_dict["results"] = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
-    return results
+    cache_dict["results"] = current_top
+    if callback: callback(1, 1)
+    return current_top
 
-# Wrappers
-def scan_top_th_symbols(limit=500, callback=None): return scan_generic_market("🇹🇭 TH", "thailand", TOP_CACHE_TH, "BUY", limit, callback)
-def scan_top_cn_symbols(limit=500, callback=None): return scan_generic_market("🇨🇳 CN", "china", TOP_CACHE_CN, "BUY", limit, callback)
-def scan_top_hk_symbols(limit=500, callback=None): return scan_generic_market("🇭🇰 HK", "hongkong", TOP_CACHE_HK, "BUY", limit, callback)
-def scan_top_us_stock_symbols(limit=500, callback=None): return scan_generic_market("🇺🇸 US", "america", TOP_CACHE_US_STOCK, "BUY", limit, callback)
-def scan_top_crypto_symbols(limit=500, callback=None): return _scan_crypto(TOP_CACHE_CRYPTO, "BUY", limit, callback)
+# ==========================================
+# Wrappers (เรียกใช้ระบบ Stateful ใหม่ทั้งหมด)
+# ==========================================
+def scan_top_th_symbols(limit=500, callback=None): return update_and_fill_market("🇹🇭 TH", "thailand", TOP_CACHE_TH, "BUY", limit, callback)
+def scan_top_cn_symbols(limit=500, callback=None): return update_and_fill_market("🇨🇳 CN", "china", TOP_CACHE_CN, "BUY", limit, callback)
+def scan_top_hk_symbols(limit=500, callback=None): return update_and_fill_market("🇭🇰 HK", "hongkong", TOP_CACHE_HK, "BUY", limit, callback)
+def scan_top_us_stock_symbols(limit=500, callback=None): return update_and_fill_market("🇺🇸 US", "america", TOP_CACHE_US_STOCK, "BUY", limit, callback)
+def scan_top_crypto_symbols(limit=500, callback=None): return _scan_crypto_stateful(TOP_CACHE_CRYPTO, "BUY", limit, callback)
 
-def scan_top_th_sell_symbols(limit=500, callback=None): return scan_generic_market("🇹🇭 TH", "thailand", TOP_SELL_CACHE_TH, "SELL", limit, callback)
-def scan_top_cn_sell_symbols(limit=500, callback=None): return scan_generic_market("🇨🇳 CN", "china", TOP_SELL_CACHE_CN, "SELL", limit, callback)
-def scan_top_hk_sell_symbols(limit=500, callback=None): return scan_generic_market("🇭🇰 HK", "hongkong", TOP_SELL_CACHE_HK, "SELL", limit, callback)
-def scan_top_us_stock_sell_symbols(limit=500, callback=None): return scan_generic_market("🇺🇸 US", "america", TOP_SELL_CACHE_US_STOCK, "SELL", limit, callback)
-def scan_top_crypto_sell_symbols(limit=500, callback=None): return _scan_crypto(TOP_SELL_CACHE_CRYPTO, "SELL", limit, callback)
+def scan_top_th_sell_symbols(limit=500, callback=None): return update_and_fill_market("🇹🇭 TH", "thailand", TOP_SELL_CACHE_TH, "SELL", limit, callback)
+def scan_top_cn_sell_symbols(limit=500, callback=None): return update_and_fill_market("🇨🇳 CN", "china", TOP_SELL_CACHE_CN, "SELL", limit, callback)
+def scan_top_hk_sell_symbols(limit=500, callback=None): return update_and_fill_market("🇭🇰 HK", "hongkong", TOP_SELL_CACHE_HK, "SELL", limit, callback)
+def scan_top_us_stock_sell_symbols(limit=500, callback=None): return update_and_fill_market("🇺🇸 US", "america", TOP_SELL_CACHE_US_STOCK, "SELL", limit, callback)
+def scan_top_crypto_sell_symbols(limit=100, callback=None): return _scan_crypto_stateful(TOP_SELL_CACHE_CRYPTO, "SELL", limit, callback)
 
 # =====================
 # 🔨 HEAVY SCAN

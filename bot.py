@@ -7,6 +7,7 @@ import requests
 from datetime import time as dt_time, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import socket
+from concurrent.futures import ThreadPoolExecutor
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -15,7 +16,6 @@ from dotenv import load_dotenv
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
-# ดึง URL จาก Environment Variable
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL", None) 
 
 logging.basicConfig(
@@ -34,6 +34,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     logger.critical("❌ ไม่พบ BOT_TOKEN! ตรวจสอบไฟล์ .env")
     exit(1)
+
+# ✅ 1. สร้าง Thread Pool รองรับคนได้ 20 คนพร้อมกัน
+executor = ThreadPoolExecutor(max_workers=20)
+
+# ✅ 2. สร้าง Lock เพื่อป้องกันกราฟ (Matplotlib) พังเวลาโดนแย่งวาดพร้อมกัน
+signal_lock = asyncio.Lock()
 
 # ==========================================
 # 🧩 IMPORTS
@@ -87,21 +93,19 @@ def run_web_server():
         logger.warning(f"⚠️ Web Server Error: {e}")
 
 # ======================
-# 🔔 KEEP-ALIVE PING (อัปเกรดให้ยิงถี่ขึ้นและหลบการบล็อก)
+# 🔔 KEEP-ALIVE PING 
 # ======================
 def keep_alive_ping():
     port = os.environ.get("PORT", 8080)
     url = RENDER_EXTERNAL_URL
     
     if not url:
-        logger.error("🚨 WARNING: ไม่พบ RENDER_EXTERNAL_URL ใน Env Variables! บอทอาจจะหลับได้ แนะนำให้ไปตั้งค่าใน Render")
+        logger.error("🚨 WARNING: ไม่พบ RENDER_EXTERNAL_URL ใน Env Variables! บอทอาจจะหลับได้")
         url = f"http://127.0.0.1:{port}"
     else:
         logger.info(f"📡 Keep-Alive Target: {url}")
         
-    time.sleep(15) # รอให้ server เริ่มทำงานก่อน
-    
-    # จำลองว่าเป็นคนเปิด Browser จริงๆ
+    time.sleep(15)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
@@ -114,10 +118,10 @@ def keep_alive_ping():
         except Exception as e:
             logger.warning(f"⚠️ Self-Ping failed: {e}")
         
-        time.sleep(300) # ✅ แก้เป็นยิงทุกๆ 5 นาที (300 วินาที) ชัวร์กว่า
+        time.sleep(300)
 
 # ======================
-# 🎨 UI HELPERS (Progress Bar)
+# 🎨 UI HELPERS
 # ======================
 def make_progress_bar(percent, length=12):
     filled_length = int(length * percent // 100)
@@ -125,18 +129,20 @@ def make_progress_bar(percent, length=12):
     return bar
 
 # ======================
-# 🛠 HELPER (SCAN + PROGRESS)
+# 🛠 HELPER (SCAN + PROGRESS) 
 # ======================
-async def execute_scan_command(update: Update, scan_func, get_text_func, market_name: str):
+async def execute_scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE, scan_func, get_text_func, market_name: str):
     start_msg_text = f"📡 *INITIALIZING SCAN...*\n🔍 Target: *{market_name}*\n\n`[░░░░░░░░░░░░] 0%`"
     status_msg = await update.message.reply_text(start_msg_text, parse_mode="Markdown")
     
-    last_update_time = 0
+    last_update_time = time.time()
     loop = asyncio.get_running_loop()
 
     def progress_callback(current, total):
         nonlocal last_update_time
-        if time.time() - last_update_time > 2.5 or current == total:
+        now = time.time()
+        # กันโดนแบนจาก Telegram (Edit ได้จำกัดต่อวินาที)
+        if now - last_update_time > 3.0 or current == total:
             percent = int((current / total) * 100)
             bar = make_progress_bar(percent, length=12) 
             
@@ -148,15 +154,19 @@ async def execute_scan_command(update: Update, scan_func, get_text_func, market_
                 f"⏳ _Please wait..._"
             )
             try:
+                # โยนการอัปเดตข้อความกลับไปที่ Loop หลัก
                 asyncio.run_coroutine_threadsafe(
                     status_msg.edit_text(text, parse_mode="Markdown"), 
                     loop
                 )
-            except: pass
+            except Exception as e: 
+                pass
+            
             last_update_time = time.time()
 
     try:
-        await loop.run_in_executor(None, lambda: scan_func(callback=progress_callback))
+        # ✅ ใช้ await คู่กับ run_in_executor เพื่อปลดล็อคให้คนอื่นใช้งานบอทต่อได้ทันที
+        await loop.run_in_executor(executor, lambda: scan_func(callback=progress_callback))
         result_text = get_text_func()
         await status_msg.edit_text(result_text, parse_mode="Markdown")
     except Exception as e:
@@ -172,17 +182,27 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 async def start(u, c): await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
 async def help_cmd(u, c): await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
 
-async def signal(u, c):
+async def signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if not c.args or len(c.args)<2: return await u.message.reply_text("Usage: /signal BTCUSDT BINANCE")
-    msg = await u.message.reply_text("Analyzing...")
+    
+    msg = await u.message.reply_text("⏳ Analyzing Data & Generating Chart...")
+    
     try:
-        res = await asyncio.get_running_loop().run_in_executor(None, run_strategy, c.args[0].upper(), c.args[1].upper())
+        loop = asyncio.get_running_loop()
+        
+        # ✅ ใช้ Lock จัดคิวคนวาดกราฟ (ให้วาดทีละ 1 รูป กัน Matplotlib พัง)
+        async with signal_lock:
+            res = await loop.run_in_executor(executor, run_strategy, c.args[0].upper(), c.args[1].upper())
+        
         await msg.delete()
         await u.message.reply_text(res["text"], parse_mode="Markdown")
         if res["chart"] and os.path.exists(res["chart"]):
-            with open(res["chart"], "rb") as p: await u.message.reply_photo(p)
+            with open(res["chart"], "rb") as p: 
+                await u.message.reply_photo(p)
             os.remove(res["chart"])
-    except Exception as e: await u.message.reply_text(f"Error: {e}")
+            
+    except Exception as e: 
+        await msg.edit_text(f"❌ Error: {e}")
 
 async def alert(u, c):
     if not c.args or len(c.args)!=4: return await u.message.reply_text("Ex: /alert BTCUSDT BINANCE above 50000")
@@ -195,21 +215,21 @@ async def alert(u, c):
     except: await u.message.reply_text("❌ Error saving alert")
 
 # Wrappers
-async def top_crypto(u, c): await execute_scan_command(u, scan_top_crypto_symbols, get_top_crypto_text, "Crypto Buy")
-async def top_th(u, c): await execute_scan_command(u, scan_top_th_symbols, get_top_th_text, "TH Buy")
-async def top_cn(u, c): await execute_scan_command(u, scan_top_cn_symbols, get_top_cn_text, "CN Buy")
-async def top_hk(u, c): await execute_scan_command(u, scan_top_hk_symbols, get_top_hk_text, "HK Buy")
-async def top_us(u, c): await execute_scan_command(u, scan_top_us_stock_symbols, get_top_us_stock_text, "US Buy")
+async def top_crypto(u, c): await execute_scan_command(u, c, scan_top_crypto_symbols, get_top_crypto_text, "Crypto Buy")
+async def top_th(u, c): await execute_scan_command(u, c, scan_top_th_symbols, get_top_th_text, "TH Buy")
+async def top_cn(u, c): await execute_scan_command(u, c, scan_top_cn_symbols, get_top_cn_text, "CN Buy")
+async def top_hk(u, c): await execute_scan_command(u, c, scan_top_hk_symbols, get_top_hk_text, "HK Buy")
+async def top_us(u, c): await execute_scan_command(u, c, scan_top_us_stock_symbols, get_top_us_stock_text, "US Buy")
 async def top_global(u, c): 
     text = get_global_top_text()
     if "กำลังสแกน" in text: await u.message.reply_text("⏳ ข้อมูล Global กำลังรอรอบสแกน...", parse_mode="Markdown")
     else: await u.message.reply_text(text, parse_mode="Markdown")
 
-async def top_sell_crypto(u, c): await execute_scan_command(u, scan_top_crypto_sell_symbols, get_top_crypto_sell_text, "Crypto Sell")
-async def top_sell_th(u, c): await execute_scan_command(u, scan_top_th_sell_symbols, get_top_th_sell_text, "TH Sell")
-async def top_sell_cn(u, c): await execute_scan_command(u, scan_top_cn_sell_symbols, get_top_cn_sell_text, "CN Sell")
-async def top_sell_hk(u, c): await execute_scan_command(u, scan_top_hk_sell_symbols, get_top_hk_sell_text, "HK Sell")
-async def top_sell_us(u, c): await execute_scan_command(u, scan_top_us_stock_sell_symbols, get_top_us_stock_sell_text, "US Sell")
+async def top_sell_crypto(u, c): await execute_scan_command(u, c, scan_top_crypto_sell_symbols, get_top_crypto_sell_text, "Crypto Sell")
+async def top_sell_th(u, c): await execute_scan_command(u, c, scan_top_th_sell_symbols, get_top_th_sell_text, "TH Sell")
+async def top_sell_cn(u, c): await execute_scan_command(u, c, scan_top_cn_sell_symbols, get_top_cn_sell_text, "CN Sell")
+async def top_sell_hk(u, c): await execute_scan_command(u, c, scan_top_hk_sell_symbols, get_top_hk_sell_text, "HK Sell")
+async def top_sell_us(u, c): await execute_scan_command(u, c, scan_top_us_stock_sell_symbols, get_top_us_stock_sell_text, "US Sell")
 async def top_sell_all(u, c): 
     text = get_global_sell_text()
     if "กำลังสแกน" in text: await u.message.reply_text("⏳ ข้อมูล Global Sell กำลังรอรอบสแกน...", parse_mode="Markdown")
@@ -219,9 +239,9 @@ async def top_on(u, c): add_top_notify_user(u.effective_chat.id); await u.messag
 async def top_off(u, c): remove_top_notify_user(u.effective_chat.id); await u.message.reply_text("🔕 Off")
 
 # Jobs
-async def job_scan_asia(ctx): await asyncio.get_running_loop().run_in_executor(None, run_scan_asia_market)
-async def job_scan_th(ctx): await asyncio.get_running_loop().run_in_executor(None, run_scan_th_market)
-async def job_scan_us(ctx): await asyncio.get_running_loop().run_in_executor(None, run_scan_us_market)
+async def job_scan_asia(ctx): await asyncio.get_running_loop().run_in_executor(executor, run_scan_asia_market)
+async def job_scan_th(ctx): await asyncio.get_running_loop().run_in_executor(executor, run_scan_th_market)
+async def job_scan_us(ctx): await asyncio.get_running_loop().run_in_executor(executor, run_scan_us_market)
 async def job_notify(ctx):
     u = load_top_notify_users(); msg = f"🌅 *DAILY*\n\n{get_global_top_text()}\n\n{get_global_sell_text()}"
     for i in u:
@@ -274,7 +294,7 @@ def main():
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    while True: # วนลูปกันตาย
+    while True:
         try:
             main()
         except Exception as e:
