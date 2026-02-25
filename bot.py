@@ -160,7 +160,6 @@ async def _scan_bg_task(chat_id: int, bot, scan_func, get_text_func, market_name
 
     try:
         # 🚀 1. สั่งรันสแกนเบื้องหลังให้เสร็จสมบูรณ์
-        
         await loop.run_in_executor(executor, lambda: scan_func(callback=progress_callback))
         
         # 🚀 2. เมื่อหลุดจากบรรทัดบนแปลว่า "เสร็จแล้ว 100%" แน่นอน
