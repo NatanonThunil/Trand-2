@@ -1,26 +1,46 @@
 import json
 import os
 
-# ✅ ต้องมี /tmp/data/ นำหน้า
-FILE = "/app/data/alerts.json"
+MONGO_URI = os.getenv("MONGO_URI")
+FILE = "/tmp/data/alerts.json"
+db_collection = None
 
-# --- เพิ่มบรรทัดนี้ ---
-print(f"🟢 ALERT STORE LOADED: Using file path -> {FILE}")
+if MONGO_URI:
+    try:
+        from pymongo import MongoClient
+        client = MongoClient(MONGO_URI)
+        db = client["TradingBotDB"]
+        db_collection = db["alerts"]
+    except Exception as e:
+        print(f"⚠️ MongoDB Connection Error in Alerts: {e}")
 
 def load_alerts():
-    if not os.path.exists(FILE): return []
-    try:
-        with open(FILE, "r") as f: return json.load(f)
-    except: return []
+    if db_collection is not None:
+        doc = db_collection.find_one({"_id": "active_alerts"})
+        return doc.get("alerts_list", []) if doc else []
+    else:
+        if not os.path.exists(FILE): return []
+        try:
+            with open(FILE, "r") as f: return json.load(f)
+        except: return []
 
 def save_alerts(alerts):
-    # ✅ ต้องมีบรรทัดนี้: สร้างโฟลเดอร์ก่อนเขียน
-    os.makedirs(os.path.dirname(FILE), exist_ok=True)
-    with open(FILE, "w") as f: json.dump(alerts, f, indent=2)
+    if db_collection is not None:
+        db_collection.update_one(
+            {"_id": "active_alerts"},
+            {"$set": {"alerts_list": alerts}},
+            upsert=True
+        )
+    else:
+        os.makedirs(os.path.dirname(FILE), exist_ok=True)
+        with open(FILE, "w") as f: json.dump(alerts, f)
 
-def remove_alert(alerts, item):
-    return [a for a in alerts if a != item]
-
+def remove_alert(alert):
+    alerts = load_alerts()
+    if alert in alerts:
+        alerts.remove(alert)
+        save_alerts(alerts)
+        
 def format_alert_message(alert, current_price):
     symbol = alert.get('symbol', 'UNKNOWN')
     exchange = alert.get('exchange', 'UNKNOWN')
