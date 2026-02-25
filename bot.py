@@ -329,7 +329,7 @@ def main():
     jq.run_daily(job_scan_asia, time=dt_time(16,30, tzinfo=TH_TZ))
     jq.run_daily(job_scan_th, time=dt_time(17,30, tzinfo=TH_TZ))
     jq.run_daily(job_scan_us, time=dt_time(5,0, tzinfo=TH_TZ))
-    jq.run_daily(job_notify, time=dt_time(11,30, tzinfo=TH_TZ))
+    jq.run_daily(job_notify, time=dt_time(8,0, tzinfo=TH_TZ))
     jq.run_repeating(job_check_alerts, interval=120, first=10)
 
     logger.info("🤖 Bot Started Ready!")
