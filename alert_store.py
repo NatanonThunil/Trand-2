@@ -1,6 +1,7 @@
 import json
 import os
 
+
 MONGO_URI = os.getenv("MONGO_URI")
 FILE = "/tmp/data/alerts.json"
 db_collection = None
@@ -40,7 +41,7 @@ def remove_alert(alert):
     if alert in alerts:
         alerts.remove(alert)
         save_alerts(alerts)
-        
+
 def format_alert_message(alert, current_price):
     symbol = alert.get('symbol', 'UNKNOWN')
     exchange = alert.get('exchange', 'UNKNOWN')
