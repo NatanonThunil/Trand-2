@@ -222,19 +222,35 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     
     # ถ้าเป็นผู้ใช้งานใหม่ (ไม่เคยทักบอทมาก่อน)
     if is_new_user(chat_id):
-        mark_user_seen(chat_id) # บันทึกชื่อลงฐานข้อมูลว่าเคยมาแล้ว
-        await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
+        mark_user_seen(chat_id)
+        guide_text = get_user_guide()
+        try:
+            # ลองส่งแบบจัดรูปแบบ Markdown ก่อน
+            await u.message.reply_text(guide_text, parse_mode="Markdown")
+        except Exception as e:
+            # ถ้ารูปแบบพัง (ลืมปิดแท็ก) ให้ส่งเป็นข้อความธรรมดาแทน บอทจะได้ไม่ดับ
+            logger.error(f"Markdown Parse Error in Start: {e}")
+            await u.message.reply_text(guide_text)
     
     # ถ้าเป็นผู้ใช้งานเก่าที่เคยกด Start ไปแล้ว
     else:
-        await u.message.reply_text(
-            "👋 ยินดีต้อนรับกลับมาครับ!\n\n"
-            "พิมพ์ /help เพื่อดูคู่มือการใช้งานอีกครั้ง\n"
-            "หรือพิมพ์คำสั่งสแกนกราฟได้เลย (เช่น /top_th)", 
-            parse_mode="Markdown"
-        )
+        try:
+            await u.message.reply_text(
+                "👋 ยินดีต้อนรับกลับมาครับ!\n\n"
+                "พิมพ์ /help เพื่อดูคู่มือการใช้งานอีกครั้ง\n"
+                "หรือพิมพ์คำสั่งสแกนกราฟได้เลย (เช่น `/top_th`)", 
+                parse_mode="Markdown"
+            )
+        except:
+            await u.message.reply_text("👋 ยินดีต้อนรับกลับมาครับ!\n\nพิมพ์ /help เพื่อดูคู่มือการใช้งานอีกครั้ง\nหรือพิมพ์คำสั่งสแกนกราฟได้เลย (เช่น /top_th)")
         
-async def help_cmd(u, c): await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
+async def help_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    guide_text = get_user_guide()
+    try:
+        await u.message.reply_text(guide_text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Markdown Parse Error in Help: {e}")
+        await u.message.reply_text(guide_text) # ส่งแบบธรรมดาถ้า Markdown พัง
 
 async def alert(u, c):
     if not c.args or len(c.args)!=4: return await u.message.reply_text("Ex: /alert BTCUSDT BINANCE above 50000")
