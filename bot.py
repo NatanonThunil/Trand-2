@@ -217,7 +217,23 @@ async def signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
     # 🎯 ใช้ create_task วาดกราฟเบื้องหลัง 
     asyncio.create_task(_signal_bg_task(u.effective_chat.id, c.bot, c.args[0].upper(), c.args[1].upper()))
 
-async def start(u, c): await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
+async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    chat_id = u.effective_chat.id
+    
+    # ถ้าเป็นผู้ใช้งานใหม่ (ไม่เคยทักบอทมาก่อน)
+    if is_new_user(chat_id):
+        mark_user_seen(chat_id) # บันทึกชื่อลงฐานข้อมูลว่าเคยมาแล้ว
+        await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
+    
+    # ถ้าเป็นผู้ใช้งานเก่าที่เคยกด Start ไปแล้ว
+    else:
+        await u.message.reply_text(
+            "👋 ยินดีต้อนรับกลับมาครับ!\n\n"
+            "พิมพ์ /help เพื่อดูคู่มือการใช้งานอีกครั้ง\n"
+            "หรือพิมพ์คำสั่งสแกนกราฟได้เลย (เช่น /top_th)", 
+            parse_mode="Markdown"
+        )
+        
 async def help_cmd(u, c): await u.message.reply_text(get_user_guide(), parse_mode="Markdown")
 
 async def alert(u, c):
