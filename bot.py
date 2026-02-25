@@ -122,7 +122,7 @@ def make_progress_bar(percent, length=12):
     return bar
 
 # ======================
-# 🛠 BACKGROUND TASKS (✅ หัวใจหลักของการแก้ปัญหา)
+# 🛠 BACKGROUND TASKS (แก้ไขปัญหาค้าง 100%)
 # ======================
 async def _scan_bg_task(chat_id: int, bot, scan_func, get_text_func, market_name: str):
     """ฟังก์ชันที่จะถูกโยนไปรันเบื้องหลัง ทำให้บอทไม่ค้าง"""
@@ -134,11 +134,13 @@ async def _scan_bg_task(chat_id: int, bot, scan_func, get_text_func, market_name
     last_update_time = time.time()
     loop = asyncio.get_running_loop()
 
+    # Callback อัปเดต %
     def progress_callback(current, total):
         nonlocal last_update_time
         now = time.time()
-        # อัปเดตทุกๆ 3 วินาที (ป้องกัน Telegram บล็อกฐานสแปมข้อความ)
-        if now - last_update_time > 3.0 or current == total:
+        
+        # อัปเดตระหว่างทาง (ทุก 3 วิ)
+        if now - last_update_time > 3.0 and current < total:
             percent = int((current / total) * 100)
             bar = make_progress_bar(percent, length=12) 
             text = (
@@ -149,7 +151,6 @@ async def _scan_bg_task(chat_id: int, bot, scan_func, get_text_func, market_name
                 f"⏳ _Please wait..._"
             )
             try:
-                # ส่งคำสั่งแก้ไขข้อความกลับไปที่คิวหลัก
                 asyncio.run_coroutine_threadsafe(
                     bot.edit_message_text(text=text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode="Markdown"), 
                     loop
@@ -158,14 +159,31 @@ async def _scan_bg_task(chat_id: int, bot, scan_func, get_text_func, market_name
             last_update_time = time.time()
 
     try:
-        # 🚀 โยนภาระงานสแกน (Pandas/Requests) ลง ThreadPool ทันที!
+        # 🚀 1. สั่งรันสแกนเบื้องหลังให้เสร็จสมบูรณ์
         await loop.run_in_executor(executor, lambda: scan_func(callback=progress_callback))
+        
+        # 🚀 2. เมื่อหลุดจากบรรทัดบนแปลว่า "เสร็จแล้ว 100%" แน่นอน
+        # ให้ดึงข้อความผลลัพธ์มา Edit ทับทันที (ไม่ต้องสน Callback ตอน 100% แล้ว)
         result_text = get_text_func()
-        await bot.edit_message_text(text=result_text, chat_id=chat_id, message_id=status_msg.message_id, parse_mode="Markdown")
+        
+        await bot.edit_message_text(
+            text=result_text, 
+            chat_id=chat_id, 
+            message_id=status_msg.message_id, 
+            parse_mode="Markdown"
+        )
+
     except Exception as e:
         logger.error(f"Scan Error ({market_name}): {e}")
-        await bot.edit_message_text(text=f"❌ *SYSTEM ERROR*\n`{e}`", chat_id=chat_id, message_id=status_msg.message_id, parse_mode="Markdown")
-
+        try:
+            await bot.edit_message_text(
+                text=f"❌ *SYSTEM ERROR*\n`{e}`", 
+                chat_id=chat_id, 
+                message_id=status_msg.message_id, 
+                parse_mode="Markdown"
+            )
+        except: pass
+        
 async def _signal_bg_task(chat_id: int, bot, symbol: str, exchange: str):
     """ฟังก์ชันวาดกราฟเบื้องหลัง"""
     msg = await bot.send_message(chat_id=chat_id, text="⏳ Analyzing Data & Generating Chart...")
