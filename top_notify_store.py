@@ -18,40 +18,53 @@ if MONGO_URI:
         print(f"⚠️ MongoDB Connection Error: {e}")
 
 def load_top_notify_users():
-    # 🌟 โหลดจากฐานข้อมูลออนไลน์ (ข้อมูลไม่มีวันหาย)
-    if db_collection is not None:
-        doc = db_collection.find_one({"_id": "users_list"})
-        return doc["chat_ids"] if doc else []
-    
-    # 📁 โหลดจากไฟล์เครื่อง (สำรองกรณีไม่ได้ต่อเน็ต)
-    else:
-        if not os.path.exists(FILE): return []
-        try:
-            with open(FILE, "r") as f: return json.load(f)
-        except: return []
+    try:
+        # 🌟 โหลดจากฐานข้อมูลออนไลน์ (ข้อมูลไม่มีวันหาย)
+        if db_collection is not None:
+            doc = db_collection.find_one({"_id": "users_list"})
+            users = doc.get("chat_ids", []) if doc else []
+            return [int(x) for x in users] # บังคับเป็น int เสมอ
+        
+        # 📁 โหลดจากไฟล์เครื่อง (สำรองกรณีไม่ได้ต่อเน็ต)
+        else:
+            if not os.path.exists(FILE): return []
+            with open(FILE, "r") as f: 
+                users = json.load(f)
+                return [int(x) for x in users]
+    except Exception as e:
+        print(f"❌ Load Notify Users Error: {e}")
+        return []
 
 def save_top_notify_users(users):
-    # 🌟 เซฟลงฐานข้อมูลออนไลน์
-    if db_collection is not None:
-        db_collection.update_one(
-            {"_id": "users_list"},
-            {"$set": {"chat_ids": users}},
-            upsert=True
-        )
+    try:
+        # ✅ บังคับให้เป็นตัวเลข (int) และลบข้อมูลที่ซ้ำกันออกให้หมด
+        users = list(set([int(x) for x in users]))
         
-    # 📁 เซฟลงไฟล์เครื่อง
-    else:
-        os.makedirs(os.path.dirname(FILE), exist_ok=True)
-        with open(FILE, "w") as f: json.dump(users, f)
+        # 🌟 เซฟลงฐานข้อมูลออนไลน์
+        if db_collection is not None:
+            db_collection.update_one(
+                {"_id": "users_list"},
+                {"$set": {"chat_ids": users}},
+                upsert=True
+            )
+            
+        # 📁 เซฟลงไฟล์เครื่อง
+        else:
+            os.makedirs(os.path.dirname(FILE), exist_ok=True)
+            with open(FILE, "w") as f: json.dump(users, f)
+    except Exception as e:
+        print(f"❌ Save Notify Users Error: {e}")
 
 def add_top_notify_user(chat_id):
     users = load_top_notify_users()
+    chat_id = int(chat_id) # บังคับแปลงเป็นตัวเลขก่อนเช็ค
     if chat_id not in users:
         users.append(chat_id)
         save_top_notify_users(users)
 
 def remove_top_notify_user(chat_id):
     users = load_top_notify_users()
+    chat_id = int(chat_id) # บังคับแปลงเป็นตัวเลขก่อนเช็ค
     if chat_id in users:
         users.remove(chat_id)
         save_top_notify_users(users)
