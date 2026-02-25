@@ -183,7 +183,7 @@ async def _scan_bg_task(chat_id: int, bot, scan_func, get_text_func, market_name
                 parse_mode="Markdown"
             )
         except: pass
-        
+
 async def _signal_bg_task(chat_id: int, bot, symbol: str, exchange: str):
     """ฟังก์ชันวาดกราฟเบื้องหลัง"""
     msg = await bot.send_message(chat_id=chat_id, text="⏳ Analyzing Data & Generating Chart...")
@@ -263,11 +263,31 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 async def job_scan_asia(ctx): await asyncio.get_running_loop().run_in_executor(executor, run_scan_asia_market)
 async def job_scan_th(ctx): await asyncio.get_running_loop().run_in_executor(executor, run_scan_th_market)
 async def job_scan_us(ctx): await asyncio.get_running_loop().run_in_executor(executor, run_scan_us_market)
+
 async def job_notify(ctx):
-    u = load_top_notify_users(); msg = f"🌅 *DAILY*\n\n{get_global_top_text()}\n\n{get_global_sell_text()}"
-    for i in u:
-        try: await ctx.bot.send_message(i, msg, parse_mode="Markdown")
-        except: pass
+    """ฟังก์ชันแจ้งเตือนตอนเช้า (ปรับปรุงใหม่)"""
+    logger.info("🌅 กำลังเริ่มส่ง Daily Notification...")
+    
+    users = load_top_notify_users()
+    if not users:
+        logger.warning("⚠️ ไม่มีรายชื่อ User ในระบบแจ้งเตือน (ไม่มีใครกด /top_on)")
+        return
+
+    # ดึงข้อความมาเตรียมไว้รอบเดียว จะได้ไม่ดึงซ้ำๆ ให้หนักเครื่อง
+    msg = f"🌅 *DAILY GLOBAL UPDATE*\n\n{get_global_top_text()}\n\n{get_global_sell_text()}"
+    
+    success_count = 0
+    for chat_id in users:
+        try:
+            # ใช้วิธีส่งแบบปกติ ไม่ต้องครอบด้วย run_in_executor เพราะมันเป็น Async อยู่แล้ว
+            await ctx.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+            success_count += 1
+            await asyncio.sleep(0.5) # พักเบรกนิดหน่อย กันโดน Telegram มองว่าเราสแปมข้อความ
+        except Exception as e:
+            logger.error(f"❌ ส่งแจ้งเตือนให้ {chat_id} ไม่สำเร็จ: {e}")
+            
+    logger.info(f"✅ ส่ง Daily Notification สำเร็จ {success_count}/{len(users)} คน")
+
 async def job_check_alerts(ctx):
     tv=TvDatafeed(); al=load_alerts(); rem=al.copy()
     for a in al:
@@ -309,7 +329,7 @@ def main():
     jq.run_daily(job_scan_asia, time=dt_time(16,30, tzinfo=TH_TZ))
     jq.run_daily(job_scan_th, time=dt_time(17,30, tzinfo=TH_TZ))
     jq.run_daily(job_scan_us, time=dt_time(5,0, tzinfo=TH_TZ))
-    jq.run_daily(job_notify, time=dt_time(8,0, tzinfo=TH_TZ))
+    jq.run_daily(job_notify, time=dt_time(11,30, tzinfo=TH_TZ))
     jq.run_repeating(job_check_alerts, interval=120, first=10)
 
     logger.info("🤖 Bot Started Ready!")
