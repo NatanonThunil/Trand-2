@@ -83,15 +83,20 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
 
+# ✅ เพิ่มคลาสนี้เพื่อบังคับให้ระบบเคลียร์ Port ที่ค้างอยู่
+class ReusableTCPServer(HTTPServer):
+    allow_reuse_address = True
+
 def run_web_server():
     port = int(os.environ.get("PORT", 8080)) 
     try:
-        server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+        # ✅ เปลี่ยนมาใช้ ReusableTCPServer แทน HTTPServer แบบเดิม
+        server = ReusableTCPServer(('0.0.0.0', port), SimpleHandler)
         logger.info(f"🌍 Web Server running on port {port}")
         server.serve_forever()
     except OSError as e:
         logger.warning(f"⚠️ Web Server Error: {e}")
-
+        
 # ======================
 # 🔔 KEEP-ALIVE PING 
 # ======================
@@ -335,8 +340,6 @@ async def job_check_alerts(ctx):
 # MAIN
 # ======================
 def main():
-    threading.Thread(target=run_web_server, daemon=True).start()
-    threading.Thread(target=keep_alive_ping, daemon=True).start()
 
     # เปิดใช้งานการรับคำสั่งคู่ขนานแบบเต็มสูบ
     app = ApplicationBuilder().token(BOT_TOKEN).concurrent_updates(True).build()
@@ -368,6 +371,9 @@ def main():
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
+
+    threading.Thread(target=run_web_server, daemon=True).start()
+    threading.Thread(target=keep_alive_ping, daemon=True).start()
     while True:
         try:
             main()
