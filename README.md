@@ -136,11 +136,3 @@ python bot.py
 
 
 
----
-
-<div align="center">
-<i>Built with ❤️ by an Algorithmic Trader</i>
-</div>
-
-```
-
