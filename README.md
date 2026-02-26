@@ -41,7 +41,7 @@ An advanced Telegram Bot designed for traders. It automatically scans global mar
 
 1. **Clone the repository:**
 
-   git clone [https://github.com/yourusername/your-repo-name.git](https://github.com/yourusername/your-repo-name.git)
+   git clone [[https://github.com/yourusername/your-repo-name.git](https://github.com/yourusername/your-repo-name.git)](https://github.com/NatanonThunil/Trand-2.git)
    cd your-repo-name
 
 
@@ -103,7 +103,7 @@ python bot.py
 
 1. **โคลนโปรเจกต์:**
 ```bash
-git clone [https://github.com/yourusername/your-repo-name.git](https://github.com/yourusername/your-repo-name.git)
+git clone [[https://github.com/yourusername/your-repo-name.git](https://github.com/yourusername/your-repo-name.git)](https://github.com/NatanonThunil/Trand-2.git)
 cd your-repo-name
 
 ```
@@ -144,9 +144,3 @@ python bot.py
 
 ```
 
-### 💡 ข้อแนะนำเพิ่มเติมก่อนเอาไปใช้:
-
-1.  ตรงบรรทัด `git clone https://github.com/yourusername/your-repo-name.git` อย่าลืมเปลี่ยนลิงก์เป็น URL ของ Repository ของคุณจริงๆ นะครับ
-2.  โค้ดนี้ใช้ไอคอน Badges สวยๆ จากเว็บ `shields.io` ซึ่งจะโชว์รูปโลโก้ Python, Telegram, MongoDB ออกมาสวยงามบนหน้า GitHub เลยครับ
-
-```
