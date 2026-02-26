@@ -7,28 +7,99 @@ from datetime import datetime
 import time
 import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.lines as mlines # สำหรับวาด Legend
+import matplotlib.lines as mlines 
 import numpy as np
+import json
+import logging
 matplotlib.use('Agg')
 
-# =====================
-# 💾 CACHE STORAGE
-# =====================
-TOP_CACHE_TH = { "region": "TH", "updated_at": None, "results": [] }
-TOP_CACHE_CN = { "region": "CN", "updated_at": None, "results": [] }
-TOP_CACHE_HK = { "region": "HK", "updated_at": None, "results": [] }
-TOP_CACHE_US_STOCK = { "region": "US", "updated_at": None, "results": [] }
-TOP_CACHE_CRYPTO = { "exchange": "BINANCE", "updated_at": None, "results": [] }
+logger = logging.getLogger(__name__)
 
-TOP_SELL_CACHE_TH = { "region": "TH", "updated_at": None, "results": [] }
-TOP_SELL_CACHE_CN = { "region": "CN", "updated_at": None, "results": [] }
-TOP_SELL_CACHE_HK = { "region": "HK", "updated_at": None, "results": [] }
-TOP_SELL_CACHE_US_STOCK = { "region": "US", "updated_at": None, "results": [] }
-TOP_SELL_CACHE_CRYPTO = { "exchange": "BINANCE", "updated_at": None, "results": [] }
+# =====================
+# 💾 DATABASE STORAGE (MONGODB)
+# =====================
+MONGO_URI = os.getenv("MONGO_URI")
+db_collection = None
 
+if MONGO_URI:
+    try:
+        from pymongo import MongoClient
+        client = MongoClient(MONGO_URI)
+        db = client["TradingBotDB"]
+        db_collection = db["global_market_data"] # ตารางใหม่สำหรับเก็บหุ้น Top
+    except Exception as e:
+        logger.error(f"⚠️ MongoDB Connection Error in Strategy: {e}")
+
+# =====================
+# 💾 CACHE SYSTEM
+# =====================
+# โครงสร้างพื้นฐาน
+DEFAULT_CACHE = { "updated_at": None, "results": [] }
 GLOBAL_DATA_STORE = { "TH": [], "CN": [], "HK": [], "US": [], "CRYPTO": [] }
 GLOBAL_DATA_SELL_STORE = { "TH": [], "CN": [], "HK": [], "US": [], "CRYPTO": [] }
 GLOBAL_LAST_UPDATE = {"time": None}
+
+def save_cache_to_db(market_key, data, is_sell=False):
+    """เซฟผลการสแกนลง Database อัตโนมัติ"""
+    if db_collection is not None:
+        doc_id = f"sell_{market_key}" if is_sell else f"buy_{market_key}"
+        try:
+            db_collection.update_one(
+                {"_id": doc_id},
+                {"$set": {
+                    "results": data.get("results", []),
+                    "updated_at": datetime.now().isoformat()
+                }},
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"Failed to save {doc_id} to DB: {e}")
+
+def load_cache_from_db(market_key, is_sell=False):
+    """โหลดผลการสแกนจาก Database ขึ้นมาใช้ตอนเปิดบอท"""
+    if db_collection is not None:
+        doc_id = f"sell_{market_key}" if is_sell else f"buy_{market_key}"
+        try:
+            doc = db_collection.find_one({"_id": doc_id})
+            if doc:
+                return {
+                    "results": doc.get("results", []),
+                    "updated_at": datetime.fromisoformat(doc["updated_at"]) if doc.get("updated_at") else None
+                }
+        except Exception as e:
+            logger.error(f"Failed to load {doc_id} from DB: {e}")
+    return { "updated_at": None, "results": [] }
+
+# โหลดข้อมูลเก่ามาใส่ Cache ทันทีที่เปิดบอท
+TOP_CACHE_TH = load_cache_from_db("TH")
+TOP_CACHE_CN = load_cache_from_db("CN")
+TOP_CACHE_HK = load_cache_from_db("HK")
+TOP_CACHE_US_STOCK = load_cache_from_db("US")
+TOP_CACHE_CRYPTO = load_cache_from_db("CRYPTO")
+
+TOP_SELL_CACHE_TH = load_cache_from_db("TH", is_sell=True)
+TOP_SELL_CACHE_CN = load_cache_from_db("CN", is_sell=True)
+TOP_SELL_CACHE_HK = load_cache_from_db("HK", is_sell=True)
+TOP_SELL_CACHE_US_STOCK = load_cache_from_db("US", is_sell=True)
+TOP_SELL_CACHE_CRYPTO = load_cache_from_db("CRYPTO", is_sell=True)
+
+# อัปเดต GLOBAL STORE เพื่อให้คำสั่ง /top_all ใช้ได้ทันที
+GLOBAL_DATA_STORE["TH"] = TOP_CACHE_TH["results"]
+GLOBAL_DATA_STORE["CN"] = TOP_CACHE_CN["results"]
+GLOBAL_DATA_STORE["HK"] = TOP_CACHE_HK["results"]
+GLOBAL_DATA_STORE["US"] = TOP_CACHE_US_STOCK["results"]
+GLOBAL_DATA_STORE["CRYPTO"] = TOP_CACHE_CRYPTO["results"]
+
+GLOBAL_DATA_SELL_STORE["TH"] = TOP_SELL_CACHE_TH["results"]
+GLOBAL_DATA_SELL_STORE["CN"] = TOP_SELL_CACHE_CN["results"]
+GLOBAL_DATA_SELL_STORE["HK"] = TOP_SELL_CACHE_HK["results"]
+GLOBAL_DATA_SELL_STORE["US"] = TOP_SELL_CACHE_US_STOCK["results"]
+GLOBAL_DATA_SELL_STORE["CRYPTO"] = TOP_SELL_CACHE_CRYPTO["results"]
+
+# หาเวลาอัปเดตล่าสุด
+all_times = [c["updated_at"] for c in [TOP_CACHE_TH, TOP_CACHE_CN, TOP_CACHE_HK, TOP_CACHE_US_STOCK, TOP_CACHE_CRYPTO] if c["updated_at"]]
+if all_times:
+    GLOBAL_LAST_UPDATE["time"] = max(all_times)
 
 # =====================
 # 🛠 UTILS
@@ -291,9 +362,21 @@ def update_and_fill_market(region_name, scanner_region, cache_dict, mode="BUY", 
     # เรียงลำดับตัวท็อป 5 ตัว (เก่า+ใหม่ผสมกัน) ให้คนได้คะแนนสูงสุดขึ้นก่อน
     current_top = sorted(current_top, key=lambda x: x["score"], reverse=True)[:5]
     
+    current_top = sorted(current_top, key=lambda x: x["score"], reverse=True)[:5]
     cache_dict["updated_at"] = datetime.now()
     cache_dict["results"] = current_top
-    if callback: callback(1, 1) # ส่ง 100% ตอนจบ
+    
+    # ✅ เซฟลง Database ทันที
+    market_key = region_name.split()[-1] # เอาคำย่อ TH, CN ออกมา
+    is_sell = (mode == "SELL")
+    save_cache_to_db(market_key, cache_dict, is_sell)
+    
+    # อัปเดต Global เพื่อให้ /top_all รันได้ทันที
+    if is_sell: GLOBAL_DATA_SELL_STORE[market_key] = current_top
+    else: GLOBAL_DATA_STORE[market_key] = current_top
+    GLOBAL_LAST_UPDATE["time"] = datetime.now()
+    
+    if callback: callback(1, 1) 
     return current_top
 
 
@@ -349,6 +432,16 @@ def _scan_crypto_stateful(cache_dict, mode="BUY", limit=100, callback=None):
     current_top = sorted(current_top, key=lambda x: x["score"], reverse=True)[:5]
     cache_dict["updated_at"] = datetime.now()
     cache_dict["results"] = current_top
+    
+    # ✅ เซฟ Crypto ลง Database ทันที
+    is_sell = (mode == "SELL")
+    save_cache_to_db("CRYPTO", cache_dict, is_sell)
+    
+    # อัปเดต Global 
+    if is_sell: GLOBAL_DATA_SELL_STORE["CRYPTO"] = current_top
+    else: GLOBAL_DATA_STORE["CRYPTO"] = current_top
+    GLOBAL_LAST_UPDATE["time"] = datetime.now()
+    
     if callback: callback(1, 1)
     return current_top
 
